@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
- 
+
 # We wrap the core logic in a function to avoid polluting the user's shell with local variables when sourced.
 _awsp_main() {
+    local script_path="$1"
     local CONFIG_FILE="${HOME}/.aws/config"
     local profiles=()
     local line
@@ -25,9 +26,9 @@ _awsp_main() {
     if [[ "$is_sourced" = false ]]; then
         echo "Error: This script must be sourced to set environment variables in your current shell."
         echo "Please run:"
-        echo "    source /Users/macbook/Projekt/mac/kubernetes/awsp.sh"
+        echo "    source $script_path"
         echo "or:"
-        echo "    . /Users/macbook/Projekt/mac/kubernetes/awsp.sh"
+        echo "    . $script_path"
         exit 1
     fi
 
@@ -59,16 +60,44 @@ _awsp_main() {
     echo "Available AWS profiles:"
     echo
 
+    # Display the profiles in a vertical list
+    local idx=1
+    local p
+    for p in "${profiles[@]}"; do
+        printf "%2d) %s\n" "$idx" "$p"
+        idx=$((idx + 1))
+    done
+    echo
+
     # Prompt user to select a profile
-    select profile in "${profiles[@]}"; do
-        if [[ "$profile" == "Cancel" ]]; then
-            echo "Cancelled."
-            return 0 2>/dev/null || exit 0
-        elif [[ -n "${profile:-}" ]]; then
-            break
+    local selection=""
+    local num_profiles=${#profiles[@]}
+    while true; do
+        if [[ -n "$ZSH_VERSION" ]]; then
+            read -r "selection?$PS3"
+        else
+            read -r -p "$PS3" selection
+        fi
+
+        # Validate that the selection is a positive integer and within range
+        if [[ "$selection" =~ ^[0-9]+$ ]] && (( selection >= 1 && selection <= num_profiles )); then
+            # Find the selected profile in a cross-shell compatible way
+            local search_idx=1
+            for p in "${profiles[@]}"; do
+                if [[ "$search_idx" -eq "$selection" ]]; then
+                    profile="$p"
+                    break 2
+                fi
+                search_idx=$((search_idx + 1))
+            done
         fi
         echo "Invalid selection. Please choose a valid number."
     done
+
+    if [[ "$profile" == "Cancel" ]]; then
+        echo "Cancelled."
+        return 0 2>/dev/null || exit 0
+    fi
 
     echo
     echo "Selected profile: $profile"
@@ -80,27 +109,19 @@ _awsp_main() {
     # Obtain credentials
     credentials=$(aws configure export-credentials --profile "$profile" --format env 2>/dev/null)
     if [[ $? -ne 0 ]] || [[ -z "$credentials" ]]; then
-        echo "Error: Failed to retrieve credentials for profile '$profile'."
-        
-        # Check if it is an SSO profile and offer login if needed
+        # Check if it is an SSO profile and log in automatically
         if grep -A 10 "\[profile \"\?$profile\"\?\]" "$CONFIG_FILE" 2>/dev/null | grep -E -q "sso_start_url|sso_session"; then
-            echo "This profile appears to use AWS SSO. Your session might be expired."
-            if [[ -n "$ZSH_VERSION" ]]; then
-                read -r "response?Would you like to run 'aws sso login --profile $profile'? [y/N] "
-            else
-                read -r -p "Would you like to run 'aws sso login --profile $profile'? [y/N] " response
-            fi
-            if [[ "$response" =~ ^[yY](es)?$ ]]; then
-                aws sso login --profile "$profile"
-                credentials=$(aws configure export-credentials --profile "$profile" --format env 2>/dev/null)
-                if [[ $? -ne 0 ]] || [[ -z "$credentials" ]]; then
-                    echo "Error: Failed to retrieve credentials after running aws sso login."
-                    return 1 2>/dev/null || exit 1
-                fi
-            else
+            echo "SSO session expired or not logged in. Launching 'aws sso login'..."
+            aws sso login --profile "$profile"
+            
+            # Try obtaining credentials again
+            credentials=$(aws configure export-credentials --profile "$profile" --format env 2>/dev/null)
+            if [[ $? -ne 0 ]] || [[ -z "$credentials" ]]; then
+                echo "Error: Failed to retrieve credentials even after logging in."
                 return 1 2>/dev/null || exit 1
             fi
         else
+            echo "Error: Failed to retrieve credentials for profile '$profile'."
             return 1 2>/dev/null || exit 1
         fi
     fi
@@ -115,5 +136,5 @@ _awsp_main() {
 }
 
 # Run the main function and then clean it up
-_awsp_main
+_awsp_main "${BASH_SOURCE[0]:-$0}"
 unset -f _awsp_main
