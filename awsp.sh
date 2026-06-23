@@ -130,6 +130,14 @@ _awsp_main() {
     eval "$credentials"
 
     echo
+    echo "Verifying credentials with AWS..."
+    if ! aws sts get-caller-identity >/dev/null; then
+        echo "Error: Loaded credentials are invalid (failed validation with AWS)."
+        echo "Unsetting AWS environment variables to keep your terminal session clean..."
+        unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE
+        return 1 2>/dev/null || exit 1
+    fi
+
     echo "Logged in successfully."
     echo "Current identity:"
     aws sts get-caller-identity
