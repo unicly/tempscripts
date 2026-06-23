@@ -107,7 +107,7 @@ _awsp_main() {
     unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE
 
     # Obtain credentials
-    credentials=$(aws configure export-credentials --profile "$profile" --format env 2>/dev/null)
+    credentials=$(aws configure export-credentials --profile "$profile" --format env)
     if [[ $? -ne 0 ]] || [[ -z "$credentials" ]]; then
         # Check if it is an SSO profile and log in automatically
         if grep -A 10 "\[profile \"\?$profile\"\?\]" "$CONFIG_FILE" 2>/dev/null | grep -E -q "sso_start_url|sso_session"; then
@@ -115,7 +115,7 @@ _awsp_main() {
             aws sso login --profile "$profile"
             
             # Try obtaining credentials again
-            credentials=$(aws configure export-credentials --profile "$profile" --format env 2>/dev/null)
+            credentials=$(aws configure export-credentials --profile "$profile" --format env)
             if [[ $? -ne 0 ]] || [[ -z "$credentials" ]]; then
                 echo "Error: Failed to retrieve credentials even after logging in."
                 return 1 2>/dev/null || exit 1
