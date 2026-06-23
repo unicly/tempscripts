@@ -2,7 +2,7 @@
 
 # We wrap the core logic in a function to avoid polluting the user's shell with local variables when sourced.
 _awsp_main() {
-    local script_path="$1"
+    local script_path="${1:-}"
     local CONFIG_FILE="${HOME}/.aws/config"
     local profiles=()
     local line
@@ -13,12 +13,12 @@ _awsp_main() {
 
     # Detect if the script is sourced or run directly
     local is_sourced=false
-    if [[ -n "$BASH_VERSION" ]]; then
-        if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    if [[ -n "${BASH_VERSION:-}" ]]; then
+        if [[ "${BASH_SOURCE[0]:-}" != "${0:-}" ]]; then
             is_sourced=true
         fi
-    elif [[ -n "$ZSH_VERSION" ]]; then
-        if [[ "$ZSH_EVAL_CONTEXT" == *file* ]]; then
+    elif [[ -n "${ZSH_VERSION:-}" ]]; then
+        if [[ "${ZSH_EVAL_CONTEXT:-}" == *file* ]]; then
             is_sourced=true
         fi
     fi
@@ -73,7 +73,7 @@ _awsp_main() {
     local selection=""
     local num_profiles=${#profiles[@]}
     while true; do
-        if [[ -n "$ZSH_VERSION" ]]; then
+        if [[ -n "${ZSH_VERSION:-}" ]]; then
             read -r "selection?$PS3"
         else
             read -r -p "$PS3" selection
@@ -144,5 +144,5 @@ _awsp_main() {
 }
 
 # Run the main function and then clean it up
-_awsp_main "${BASH_SOURCE[0]:-$0}"
+_awsp_main "${BASH_SOURCE[0]:-${0:-}}"
 unset -f _awsp_main
