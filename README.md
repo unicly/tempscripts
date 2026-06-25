@@ -15,7 +15,11 @@ When you select a profile, it dynamically exports the correct temporary credenti
 
 ## Step-by-Step Setup
 
-### Step 1: Configure your AWS Profiles
+### Step 1: Save the bash script in C:\Users\MXXXXXX\.local\bin
+
+#### Add the URI of the bash script to the variable "Path" in your Windows environment variables.
+
+### Step 2: Configure your AWS Profiles
 
 Profiles are configured in your global AWS config file `~/.aws/config`
 
@@ -62,14 +66,12 @@ If you do not know your actual AWS Account ID or Role Name for the SSO config, f
 
 ### Step 3: Run the Script
 
-Run the script by **sourcing** it from your terminal:
+Run the script by **sourcing** it from your terminal.
+
+Using `source`is necessary for the script to set environmental variables.
 
 ```bash
-source ./awsp.sh
-```
-or:
-```bash
-. ./awsp.sh
+source awsp.sh
 ```
 
 #### How it works when run:
