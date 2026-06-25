@@ -104,7 +104,7 @@ _awsp_main() {
     echo
 
     # Unset existing AWS environment variables to prevent conflicts
-    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE
+    unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE AWS_DEFAULT_REGION
 
     # Obtain credentials
     credentials=$(aws configure export-credentials --profile "$profile" --format env)
@@ -129,12 +129,19 @@ _awsp_main() {
     echo "Loading credentials..."
     eval "$credentials"
 
+    # Export the profile's region so CLI tools don't require --region
+    local region
+    region=$(aws configure get region --profile "$profile" 2>/dev/null)
+    if [[ -n "$region" ]]; then
+        export AWS_DEFAULT_REGION="$region"
+    fi
+
     echo
     echo "Verifying credentials with AWS..."
     if ! aws sts get-caller-identity >/dev/null; then
         echo "Error: Loaded credentials are invalid (failed validation with AWS)."
         echo "Unsetting AWS environment variables to keep your terminal session clean..."
-        unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE
+        unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION AWS_PROFILE AWS_DEFAULT_REGION
         return 1 2>/dev/null || exit 1
     fi
 
