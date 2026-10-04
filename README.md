@@ -84,3 +84,12 @@ source awsp.sh
 5. **Verifies Session**: Performs an `aws sts get-caller-identity` verification call.
    - If successful: You are logged in!
    - If it fails (e.g. keys are deactivated or expired): It prints the AWS error, automatically unsets the variables to keep your terminal clean, and exits.
+
+---
+
+## Other Docs
+
+- **Apache Iceberg file format guide** (`docs/iceberg/`)
+  1. [Overview & File Layout](docs/iceberg/01-overview.md)
+  2. [Metadata Files in Detail](docs/iceberg/02-metadata-files.md)
+  3. [Reads, Writes & Maintenance](docs/iceberg/03-operations.md)
