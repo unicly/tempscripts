@@ -169,7 +169,7 @@ No. Spark is one option among several.
 | **Structured Streaming on a shared Delta CDF table** | — | ✅ D4 | Databricks | Python, Scala | Near-real-time deltas |
 | **OSS Apache Spark** (EMR, HDInsight, AKS, Synapse/Fabric Spark…) | ✅ F3 | ✅ D3 | Outside Databricks | Python, Scala, SQL | Full Iceberg API (snapshots, changelog) through both IRCs |
 | **Apache Flink** | ✅ | ✅ append-only incremental snapshot reads | Outside Databricks | Java, SQL | Good for append-only streaming replication |
-| **Trino / Starburst** | ✅ (`CREATE TABLE AS`, `INSERT`) | ✅ (`MERGE` with watermark) | Outside Databricks | SQL | One query engine that can attach both IRCs |
+| **Trino / Starburst** | ✅ (`CREATE TABLE AS`, `INSERT`) | ✅ (`MERGE` with watermark) | Outside Databricks | SQL | Iceberg connector with `iceberg.catalog.type=rest`, one catalog per UC. Databricks lists Trino as a read/write IRC client. Requires external data access on the metastore + `EXTERNAL USE SCHEMA` grant. ⚠️ Trino credential vending is documented for S3; for ADLS you may have to configure storage credentials in Trino yourself |
 | **PyIceberg** | ✅ small/medium | ✅ (`upsert`, snapshot-based reads) | Anywhere Python runs (incl. Functions / Lambda) | Python | No cluster. Limited by memory |
 | **Storage-level copy** (S3 replication, AzCopy, ADF) | ❌ | ❌ | — | — | **Not possible** for managed Iceberg: files can't be registered in UC |
 
