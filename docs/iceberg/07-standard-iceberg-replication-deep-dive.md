@@ -124,6 +124,9 @@ CALL az.system.register_table(
 
 ### D1 in detail: incremental file-level replication
 
+For a step-by-step explanation with a worked example, see
+[`08-incremental-rewrite-table-path-explained.md`](08-incremental-rewrite-table-path-explained.md).
+
 | Step | What | Notes |
 |---|---|---|
 | 1 | Read the state: last replicated `metadata.json` name (store it, for example as a target table property or in a control table) | Like the watermark in `04-…md` |
