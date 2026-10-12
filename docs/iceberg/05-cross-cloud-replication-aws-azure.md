@@ -67,7 +67,7 @@ Setup: each cloud has its own UC metastore and its own managed Iceberg tables.
 |---|---|---|---|---|---|---|---|---|
 | **M1. OpenSharing D2D (live share)** | The AWS metastore shares tables with the Azure metastore and vice versa. The recipient mounts the share as a catalog | ❌ (zero-copy) | Live (latest snapshot) | n/a | ❌ read-only | ✅ separate share in each direction | **On every read** | ⚠️ sharing managed Iceberg: Public Preview |
 | **M2. OpenSharing + local materialization** | As M1, plus a scheduled job on the recipient that copies the shared table into a local managed table (`CREATE OR REPLACE … DEEP CLONE`, CTAS or `MERGE`) | ✅ | Batch (schedule) | ⚠️ CDF not available for managed Iceberg. Incremental only with a watermark column + `MERGE`, otherwise a full copy | ✅ (a separate table) | ✅ | Once per refresh | ⚠️ |
-| **M3. Cross-cloud Iceberg REST Catalog** | A Spark job on cloud B connects to the IRC of the UC on cloud A (credential vending), reads the snapshot delta (Iceberg changelog view / incremental read, see `04-…md`) and `MERGE`s into a local managed table | ✅ | Batch | ✅ snapshot-based | ✅ | ✅ (run the job in each direction) | Only the delta | ⚠️ IRC read/write is documented. Running Databricks compute as an IRC client of another metastore is unverified |
+| **M3. Cross-cloud Iceberg REST Catalog** | An **OSS Spark** job (outside Databricks, which can't load OSS Iceberg catalogs) connects to the IRC of the UC on cloud A (credential vending), reads the snapshot delta (Iceberg changelog view / incremental read, see `04-…md`) and `MERGE`s into a local managed table | ✅ | Batch | ✅ snapshot-based | ✅ | ✅ (run the job in each direction) | Only the delta | ⚠️ IRC read/write is documented. Needs non-Databricks Spark; changelog over v3 deletion vectors unverified |
 | **M4. OpenSharing to external Iceberg clients** (open sharing, bearer token, Iceberg REST) | As M1, but the recipient is a non-Databricks Iceberg client | ❌ | Live | n/a | ❌ | ✅ | On every read | ⚠️ docs conflict on whether **managed Iceberg** can be shared to external Iceberg clients. Not needed here, since Databricks runs on both sides |
 | **M5. Single owner, remote writers** (no replication) | Each table lives on one cloud. The other cloud reads and writes it through the IRC | ❌ | Live | n/a | ✅ | ✅ | **On every read and write** | ✅ IRC read/write |
 
@@ -126,14 +126,14 @@ Azure). Data is in S3 and ADLS.
 | History on the target | ❌ | ❌ | ✅ | ❌ |
 | Egress profile | M1 per query / M2 per refresh | Delta only | Delta only | Delta only |
 | Maintenance | Automatic | Automatic | Manual | Manual |
-| Main risk | Preview features. No CDF for Iceberg | Unverified Databricks-as-IRC-client setup | Pipeline complexity, path rewriting | Divergence if the target is written |
+| Main risk | Preview features. No CDF for Iceberg | Needs extra non-Databricks Spark compute | Pipeline complexity, path rewriting | Divergence if the target is written |
 
 **Initial assessment (for further research, not a decision):**
 
 - **All-Databricks, UC-governed:** managed Iceberg with **OpenSharing D2D** (M1) for low-volume or
   ad-hoc access. Add local materialization (M2) for heavily queried tables to avoid paying egress
-  on every query. **M3** is the most egress-efficient incremental option if Databricks compute can
-  act as an IRC client of the other metastore, which a POC should test first.
+  on every query. **M3** is the most egress-efficient incremental option, but it needs OSS Spark outside
+  Databricks (see `06-…md`).
 - **Catalog-neutral:** standard Iceberg with **S2** (simple, incremental, any catalog) or **S1**
   (exact replica with history). You lose UC write governance on those tables.
 
