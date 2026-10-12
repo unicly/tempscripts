@@ -218,3 +218,17 @@ No. Spark is one option among several.
 - [Databricks: CREATE MATERIALIZED VIEW (pipelines)](https://docs.databricks.com/aws/en/ldp/developer/ldp-sql-ref-create-materialized-view)
 - [Databricks Community: managed Iceberg streaming limitation](https://community.databricks.com/t5/data-engineering/iceberg-native-table-streaming-in-databricks/m-p/151456)
 - [Apache Iceberg Javadoc: RewriteTablePath](https://iceberg.apache.org/javadoc/1.11.0/org/apache/iceberg/actions/RewriteTablePath.html)
+
+### Trino access and snapshots vs. versions
+
+- [Databricks: Access Databricks tables from Apache Iceberg clients (Azure)](https://learn.microsoft.com/en-us/azure/databricks/external-access/iceberg)
+- [Databricks blog: Announcing full Apache Iceberg support in Databricks](https://www.databricks.com/blog/announcing-full-apache-iceberg-support-databricks)
+- [Databricks Community: How to read Unity Catalog tables from Trino via open APIs](https://community.databricks.com/t5/technical-blog/how-to-read-unity-catalog-tables-from-trino-via-open-apis/ba-p/109654)
+- [Databricks Community: Performing DML operations on Unity Catalog from AWS engines](https://community.databricks.com/t5/technical-blog/performing-dml-operations-on-databricks-unity-catalog-from-aws/ba-p/122967)
+- [Unity Catalog OSS: Trino integration](https://docs.unitycatalog.io/integrations/unity-catalog-trino/)
+- [Lakekeeper: engine docs (Trino vended credentials S3 only)](https://docs.lakekeeper.io/docs/0.9.x/engines/)
+- [Databricks: Read Delta tables with Iceberg clients (UniForm)](https://docs.databricks.com/aws/en/delta/uniform)
+- [Databricks: Read Delta Lake tables with Iceberg clients](https://learn.microsoft.com/azure/databricks/delta/iceberg-reads)
+- [Databricks Community: How to access snapshots in Iceberg tables](https://community.databricks.com/t5/data-engineering/how-to-access-snapshots-in-iceberg-tables/td-p/150999)
+- [Trino: Iceberg connector documentation](https://trino.io/docs/current/connector/iceberg.html)
+- [Trino PR #30612: snapshot-loading-mode for the Iceberg REST catalog](https://github.com/trinodb/trino/pull/30612)
