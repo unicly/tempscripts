@@ -15,7 +15,7 @@ and [`11-replication-quick-summary.md`](11-replication-quick-summary.md).
 
 | Point | What it means |
 |---|---|
-| Unity Catalog owns the metadata | Files can't be copied and registered: no `rewrite_table_path`, no `register_table`, no storage-level restore |
+| Unity Catalog owns the metadata | Files can't be registered back into Unity Catalog: no `rewrite_table_path`, no `register_table`, no direct storage-level restore. The files are standard Iceberg, so data can still be **recovered** outside Unity Catalog (§2.3) |
 | Every copy goes through Unity Catalog | Either Databricks itself, or an external engine through Unity Catalog's **Iceberg REST catalog** (`/api/2.1/unity-catalog/iceberg-rest`) |
 | No change data feed for Iceberg | Deltas need a watermark, Iceberg snapshots (outside Databricks), or an outbox Delta table |
 | `DEEP CLONE` is always a full copy | Not incremental for managed Iceberg (unlike Delta) |
@@ -37,7 +37,7 @@ and [`11-replication-quick-summary.md`](11-replication-quick-summary.md).
 | 2. Backup catalog | **Watermark `MERGE`** into a backup table | Same, with less copying | Deletes only with soft deletes |
 | 3. Other cloud | **OpenSharing + clone or `MERGE`** on the other cloud | Loss of a workspace, region or cloud | Same mechanism as replication (§3–4) |
 | 4. Vault (best option) | **Export to a standard Iceberg table** (Glue / Polaris) in an immutable bucket, with open-source Spark through the REST catalog | Everything above, plus ransomware and deliberate deletion | Incremental (snapshot delta). The vault's own snapshots give point-in-time backups. S3 Object Lock or Azure immutable storage |
-| ❌ Not a restore path | Storage-level backup (S3 versioning, AWS Backup, Azure Blob versioning, soft delete, Azure Backup) | Only files, not Unity Catalog metadata | Files can't be re-registered in Unity Catalog. A safety net at most |
+| ⚠️ Emergency recovery only | Storage-level backup of the managed storage (S3 versioning, AWS Backup, Azure Blob versioning, soft delete, Azure Backup) | Deleted files, dropped table after the 8-day `UNDROP` window | Not a direct restore: files can't be re-registered in Unity Catalog. Data can be recovered through standard Iceberg and loaded into a **new** managed table (§2.3). Not supported by Databricks |
 
 ### 2.2 Restore: which method for which situation
 
@@ -47,7 +47,31 @@ and [`11-replication-quick-summary.md`](11-replication-quick-summary.md).
 | Table dropped (≤ 7 days) | `UNDROP` | `UNDROP TABLE prod.sales.orders` ⚠️ |
 | Error found after retention | Dated clone | `CREATE OR REPLACE TABLE prod.sales.orders DEEP CLONE backup.sales.orders_20261012` |
 | Workspace / region / cloud lost | Copy on the other cloud | Share it back, then `DEEP CLONE` into a new production table |
+| Files in managed storage intact (or restored from storage versioning), but table or metastore gone | Emergency recovery through standard Iceberg (§2.3) | PyIceberg `StaticTable.from_metadata("s3://…/metadata/00042-….metadata.json")` or `register_table` in Glue, then load into a new managed table |
 | Ransomware, deliberate deletion, metastore lost | Vault (standard Iceberg) | `CREATE TABLE uc.sales.orders DEEP CLONE glue_fed.backup.orders` (via federation), or open-source Spark: read vault → write through the REST catalog |
+
+### 2.3 Emergency recovery from managed storage (without Unity Catalog)
+
+The files in Unity Catalog's managed storage are ordinary Iceberg files (`metadata.json`, manifests,
+Parquet, deletion vectors). Only the pointer to the current `metadata.json`, the permissions and the
+lineage live in Unity Catalog. ⚠️ Inferred from how the Iceberg REST catalog works, not documented.
+
+| Step | What | Tool |
+|---|---|---|
+| 1 | Find the table folder in the managed storage location and the **newest complete `metadata.json`** | S3 / ADLS console, CLI |
+| 2 | If files were deleted: restore them first | S3 versioning, AWS Backup, Blob versioning / soft delete, Azure Backup |
+| 3 | Read the table straight from that `metadata.json`, without Unity Catalog | PyIceberg `StaticTable.from_metadata(...)`, or `register_table` in Glue / a Hadoop catalog with open-source Spark |
+| 4 | Load the data into a **new managed table** | Spark or Trino `CREATE TABLE … AS SELECT` through Unity Catalog's REST catalog, or Glue → federation → `DEEP CLONE` into Unity Catalog |
+| 5 | Re-apply grants, tags, row filters and column masks. Reset replication watermarks | Databricks |
+
+| Condition / risk | Detail |
+|---|---|
+| Files must be complete | The `metadata.json` and every manifest and data file it references. Predictive optimization expires snapshots and deletes old files |
+| Which version is current | Unknown without Unity Catalog. The highest number is usually it, but a failed commit can leave an orphan. Check that all referenced files exist |
+| Dropped tables | Data is deleted 8 days after `DROP`. Afterwards only storage versioning or backup can help |
+| Storage access | Needs direct IAM / service principal access to managed storage, which bypasses Unity Catalog governance. Use a break-glass role only |
+| Iceberg v3 | The reader must support v3 and deletion vectors |
+| Support | Not documented by Databricks. Do a test run before relying on it. For planned backups use the vault (layer 4) |
 
 **After any restore by clone or `CREATE TABLE … AS SELECT`:** it's a **new table** (new ID, history and
 snapshot IDs). Re-apply grants, tags, row filters and column masks, and reset replication watermarks
@@ -92,12 +116,12 @@ snapshot IDs). Re-apply grants, tags, row filters and column masks, and reset re
 | **Open-source Spark** (F3, D3, vault) | Amazon EMR, EMR Serverless, AWS Glue ETL (Spark), self-hosted on EKS | HDInsight (Spark), Azure Synapse Spark ⚠️, Microsoft Fabric Spark ⚠️, self-hosted on AKS |
 | **Trino** (F4, D5) | Amazon EMR (Trino), Starburst Galaxy/Enterprise, self-hosted on EKS | Starburst Galaxy/Enterprise, self-hosted on AKS |
 | **Flink** (D6) | Amazon Managed Service for Apache Flink, EMR (Flink) | HDInsight (Flink) ⚠️, self-hosted on AKS |
-| **PyIceberg** (F5) | AWS Lambda, ECS/Fargate | Azure Functions, Azure Container Apps |
+| **PyIceberg** (F5, emergency recovery §2.3) | AWS Lambda, ECS/Fargate | Azure Functions, Azure Container Apps |
 | **Orchestration outside Databricks** | Amazon MWAA (Airflow), Step Functions | Azure Data Factory, Fabric Data Factory |
 | **Vault catalog** (backup layer 4) | AWS Glue Data Catalog (can be federated into Unity Catalog, read-only) | Hive Metastore (federable) or Apache Polaris / Lakekeeper (not federable) |
 | **Immutable vault storage** | S3 Object Lock | Azure Blob immutable storage |
-| **Storage-level safety net only** | S3 versioning, AWS Backup for S3 | Blob versioning, soft delete, Azure Backup for blobs |
-| **Not usable for managed Iceberg** | S3 replication, DataSync, `rewrite_table_path` | AzCopy, Data Factory file copy, `rewrite_table_path` |
+| **Storage-level backup (emergency recovery via standard Iceberg, §2.3)** | S3 versioning, AWS Backup for S3 | Blob versioning, soft delete, Azure Backup for blobs |
+| **Not usable to replicate managed Iceberg** | S3 replication, DataSync, `rewrite_table_path` | AzCopy, Data Factory file copy, `rewrite_table_path` |
 
 ⚠️ For Synapse Spark, Fabric Spark and HDInsight Flink, check that you can load the open-source Iceberg
 runtime and configure a REST catalog with the Unity Catalog endpoint.
