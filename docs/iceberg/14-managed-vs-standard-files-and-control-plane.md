@@ -75,6 +75,52 @@ standard Iceberg tools in an emergency (see
 Same data and metadata format, different owner. A standard table is files plus a catalog you
 control. A managed table is the same kind of files, with Unity Catalog in full control of them.
 
+## Sharing managed Iceberg tables: do you need "open sharing"?
+
+Not necessarily. "OpenSharing" (formerly Delta Sharing) is the name of the feature, and it has two
+modes. With Databricks on both clouds you need the feature, but in its **Databricks-to-Databricks**
+mode, not the "open sharing" mode.
+
+| | **Databricks-to-Databricks** | **Open sharing** |
+|---|---|---|
+| Recipient | Another Unity Catalog metastore (any cloud, any region, any account) | A non-Databricks client: Spark, pandas, Power BI, or Iceberg clients such as Trino, Snowflake, PyIceberg |
+| Authentication | Recipient's metastore sharing identifier, no tokens to manage | Bearer token or OIDC federation |
+| Managed Iceberg tables | ✅ Supported | ⚠️ Docs contradict each other: one page says managed Iceberg can't be shared to external Iceberg clients, a 2026 blog says Iceberg clients are supported |
+| AWS ↔ Azure case | ✅ **Use this** | Only needed if a non-Databricks engine must read the share |
+
+### Setting up Databricks-to-Databricks sharing
+
+| Step | Where | Example |
+|---|---|---|
+| 1 | Recipient side (for example Azure): get the metastore's sharing identifier | `SELECT CURRENT_METASTORE();` → `azure:westeurope:<uuid>` |
+| 2 | Provider side (AWS): create the recipient | `CREATE RECIPIENT azure_prod USING ID 'azure:westeurope:<uuid>';` |
+| 3 | Provider side: create the share and add the table | `CREATE SHARE aws_to_azure; ALTER SHARE aws_to_azure ADD TABLE sales.orders;` |
+| 4 | Provider side: grant access | `GRANT SELECT ON SHARE aws_to_azure TO RECIPIENT azure_prod;` |
+| 5 | Recipient side: mount the share as a catalog | `CREATE CATALOG aws_share USING SHARE <provider>.aws_to_azure;` |
+
+For Azure → AWS, do the same in the other direction.
+
+**Requirements:**
+- Unity Catalog on both sides.
+- `CREATE RECIPIENT` and `CREATE SHARE` privileges on the provider's metastore.
+- `USE CATALOG` / `SELECT` for users on the recipient side.
+
+### Limits for shared managed Iceberg tables
+
+- **Read-only** for the recipient. Copies are made with `CREATE TABLE … AS SELECT`, `MERGE` or deep clone (doc 12).
+- **No change data feed**, so deltas need a watermark or an outbox table.
+- Python connectors, Tableau and Power BI can't query shared managed Iceberg tables.
+- **Egress:** the provider's cloud bills cross-cloud reads every time the recipient queries.
+- Sharing managed Iceberg was marked **Public Preview** in the docs found. A release note may already list it as generally available, so check your workspace.
+
+### Alternatives without a share
+
+- **External engines through Unity Catalog's Iceberg REST catalog** (Spark, Trino, PyIceberg) can read and write managed Iceberg directly, with a service principal on the source metastore. No share is needed.
+- What doesn't work: attaching an Azure workspace to the AWS metastore. A metastore is tied to one cloud and region, so sharing or the REST catalog are the only ways across.
+
+**For an AWS ↔ Azure setup:** use OpenSharing in **Databricks-to-Databricks** mode, one share per
+direction. The open sharing mode is only needed for non-Databricks readers.
+
 ## Related
 
 - [`10-managed-vs-standard-iceberg-differences.md`](10-managed-vs-standard-iceberg-differences.md): full differences table
@@ -89,3 +135,9 @@ control. A managed table is the same kind of files, with Unity Catalog in full c
 - [Databricks: Access Databricks tables from Apache Iceberg clients](https://learn.microsoft.com/en-us/azure/databricks/external-access/iceberg)
 - [Databricks Community: Iceberg v3 deletion vector compatibility issue](https://community.databricks.com/t5/data-engineering/cross-engine-iceberg-v3-compatibility-issue-databricks-delete/td-p/164734)
 - [Apache Iceberg: Spark procedures](https://iceberg.apache.org/docs/latest/spark-procedures/)
+- [Databricks: What is OpenSharing?](https://docs.databricks.com/aws/en/opensharing/)
+- [Databricks: Create shares for OpenSharing](https://docs.databricks.com/aws/en/opensharing/create-share)
+- [Databricks: Read data shared using Databricks-to-Databricks OpenSharing](https://docs.databricks.com/aws/en/opensharing/read-data-databricks)
+- [Databricks: Read data shared with bearer tokens (open sharing)](https://docs.databricks.com/aws/en/opensharing/read-data-open)
+- [Databricks blog: First-class Iceberg support in Delta Sharing](https://www.databricks.com/blog/announcing-first-class-support-iceberg-format-databricks-delta-sharing)
+- [Azure Databricks: What is Delta Sharing?](https://docs.azure.cn/en-us/databricks/delta-sharing/)
