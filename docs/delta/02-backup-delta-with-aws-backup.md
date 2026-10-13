@@ -151,7 +151,7 @@ the table works again.
 | Restore in place when files were lost | ✅ Works | ✅ Works, if the pointed-to version existed at T |
 | Missing newest commits after a restore | Table silently goes back to an older version | Table is broken (pointer to a missing `metadata.json`) |
 | Restore to a **new** location | ✅ Directly usable (`CREATE TABLE … LOCATION`), full history kept | ⚠️ Only via standard Iceberg tools (register in Glue / PyIceberg), then copy into a new table |
-| Undo a bad write | `RESTORE` (mature) | `RESTORE` ⚠️ or a backup copy |
+| Undo a bad write | `RESTORE` (mature) | `RESTORE` (same command, managed Iceberg in preview) or a backup copy |
 | Main backup | Incremental deep clone | Export to a standard Iceberg vault, or full deep clones |
 
 ## 9. In short

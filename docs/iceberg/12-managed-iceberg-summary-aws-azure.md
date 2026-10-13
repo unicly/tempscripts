@@ -31,7 +31,7 @@ and [`11-replication-quick-summary.md`](11-replication-quick-summary.md).
 | Layer | Method | Protects against | Notes |
 |---|---|---|---|
 | 1. In the table | **Time travel** (`VERSION AS OF` / `TIMESTAMP AS OF`) | Bad writes in the last few days | From DBR 18.0, limited by `deletedFileRetentionDuration` (default 7 days) |
-| 1. In the table | **`RESTORE TABLE … TO VERSION AS OF`** | Bad writes, roll back in place | ⚠️ Documented for managed Iceberg only for the v3 → v2 downgrade. Test it |
+| 1. In the table | **`RESTORE TABLE … TO VERSION AS OF`** | Bad writes, roll back in place | Covered for Delta and Iceberg tables by Databricks' table history docs. ⚠️ Managed Iceberg is in preview: test it once |
 | 1. In the table | **`UNDROP TABLE`** | Table dropped by mistake | Unity Catalog managed tables, 7 days. ⚠️ Not confirmed for Iceberg |
 | 2. Backup catalog | **Dated `DEEP CLONE`** into a separate catalog and storage | Errors found after the retention period | Full copy each time, no history. Keep one copy per date |
 | 2. Backup catalog | **Watermark `MERGE`** into a backup table | Same, with less copying | Deletes only with soft deletes |
@@ -43,7 +43,7 @@ and [`11-replication-quick-summary.md`](11-replication-quick-summary.md).
 
 | Situation | Restore with | Command (example) |
 |---|---|---|
-| Wrong `UPDATE`/`DELETE` within retention | Time travel / `RESTORE` | `RESTORE TABLE prod.sales.orders TO VERSION AS OF 42` ⚠️ |
+| Wrong `UPDATE`/`DELETE` within retention | Time travel / `RESTORE` | `RESTORE TABLE prod.sales.orders TO VERSION AS OF 42` |
 | Table dropped (≤ 7 days) | `UNDROP` | `UNDROP TABLE prod.sales.orders` ⚠️ |
 | Error found after retention | Dated clone | `CREATE OR REPLACE TABLE prod.sales.orders DEEP CLONE backup.sales.orders_20261012` |
 | Workspace / region / cloud lost | Copy on the other cloud | Share it back, then `DEEP CLONE` into a new production table |

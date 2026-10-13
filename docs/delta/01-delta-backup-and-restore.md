@@ -99,7 +99,7 @@ and reset any replication watermark or streaming checkpoint.
 
 | | Delta (managed) | Managed Iceberg |
 |---|---|---|
-| `RESTORE` in place | ✅ Mature | ⚠️ Documented only for v3 → v2 downgrade |
+| `RESTORE` in place | ✅ Mature, generally available | ✅ Same command, covered by the table history docs. ⚠️ Managed Iceberg is in preview |
 | Incremental deep clone | ✅ | ❌ Full copy every time |
 | Change data feed | ✅ | ❌ |
 | File copy works at a new location | ✅ Relative paths | ❌ Absolute paths, and no registration |

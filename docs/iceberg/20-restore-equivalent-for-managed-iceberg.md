@@ -6,17 +6,21 @@ Question: what's the equivalent of Delta's `RESTORE` function on a Databricks ma
 
 ## Short answer
 
-On Databricks, the closest equivalent is the **same command**, `RESTORE TABLE … TO VERSION AS OF`,
-since Databricks uses one set of commands for Delta and Iceberg. But Databricks only documents it for
-managed Iceberg in one case: rolling a v3 table back to v2. In open-source Iceberg the equivalent is
-the **rollback procedures**, which Databricks clusters can't run, but engines connected through Unity
-Catalog's Iceberg REST catalog may be able to.
+On Databricks, the equivalent is the **same command**, `RESTORE TABLE … TO VERSION AS OF` (or
+`TO TIMESTAMP AS OF`). Databricks' "Work with table history" page covers both Delta Lake and Apache
+Iceberg tables, including restoring a table to a past state. Managed Iceberg itself is still in
+preview, so test it once. In open-source Iceberg the equivalent is the **rollback procedures**, which
+Databricks clusters can't run, but engines connected through Unity Catalog's Iceberg REST catalog may
+be able to.
+
+> **Correction:** an earlier version of this doc said `RESTORE` was documented for managed Iceberg
+> only for the v3 → v2 downgrade. The table history page covers Delta and Iceberg tables in general.
 
 ## Options
 
 | Option | Where it runs | How | Rewrites data? | Status |
 |---|---|---|---|---|
-| **1. `RESTORE TABLE`** | Databricks | `RESTORE TABLE prod.sales.orders TO VERSION AS OF 42` or `TO TIMESTAMP AS OF '2026-10-12 08:00'` | No (metadata-only, as in Delta) ⚠️ | ⚠️ Documented for managed Iceberg only for the v3 → v2 downgrade. Test it for normal rollbacks |
+| **1. `RESTORE TABLE`** | Databricks | `RESTORE TABLE prod.sales.orders TO VERSION AS OF 42` or `TO TIMESTAMP AS OF '2026-10-12 08:00'` | No (metadata-only, as in Delta) ⚠️ | ✅ Covered for Delta and Iceberg tables by the table history page. Restoring to before a v3 upgrade needs `spark.databricks.delta.restore.protocolDowngradeAllowed = true` during the restore. ⚠️ Managed Iceberg is in preview: test it once |
 | **2. Iceberg rollback procedures** | External Spark through Unity Catalog's REST catalog | `CALL uc.system.rollback_to_snapshot('sales.orders', 5123)`, `rollback_to_timestamp(...)`, `set_current_snapshot(...)` | No (only moves the current snapshot) | ⚠️ Standard Iceberg. Whether Unity Catalog accepts this kind of commit is unconfirmed |
 | **2b. Same in Trino** | Trino through Unity Catalog's REST catalog | `ALTER TABLE uc.sales.orders EXECUTE rollback_to_snapshot(5123)` (syntax depends on the Trino version) | No | ⚠️ Same as 2 |
 | **3. Rewrite from time travel** | Databricks | `INSERT OVERWRITE prod.sales.orders SELECT * FROM prod.sales.orders VERSION AS OF 42` | ✅ Yes, writes a new version with the old data | ✅ Uses only documented features. Fallback if 1 doesn't work |
@@ -44,13 +48,14 @@ Catalog's Iceberg REST catalog may be able to.
 
 ## Recommended order
 
-1. **Try option 1 (`RESTORE TABLE`) on a test table:**
+1. **Use option 1 (`RESTORE TABLE`)**, as in Delta. Because managed Iceberg is in preview, do one
+   test run first:
    - create a managed Iceberg table
    - write three versions
    - `RESTORE TABLE … TO VERSION AS OF 1`
    - check `DESCRIBE HISTORY` and the data.
-2. If it works, use it like in Delta. Otherwise use **option 3 (`INSERT OVERWRITE … VERSION AS OF`)**:
-   it costs a full rewrite, but uses only documented features.
+2. If something doesn't behave as expected, fall back to **option 3 (`INSERT OVERWRITE … VERSION AS OF`)**:
+   it costs a full rewrite, but avoids `RESTORE` entirely.
 3. If external engines are part of your setup, test **option 2** too. It's the true Iceberg rollback
    and doesn't rewrite data.
 4. Keep the retention window long enough for the mistakes you need to undo, and have a backup for
@@ -64,7 +69,8 @@ Catalog's Iceberg REST catalog may be able to.
 
 ## Sources
 
-- [Databricks: Work with table history (time travel, RESTORE, retention)](https://docs.databricks.com/aws/en/tables/history)
+- [Databricks: Work with table history (Delta Lake and Iceberg: time travel, RESTORE, retention)](https://docs.databricks.com/aws/en/tables/history)
+- [Databricks: RESTORE (SQL reference)](https://docs.databricks.com/aws/en/sql/language-manual/delta-restore)
 - [Databricks: Use Apache Iceberg v3 features (RESTORE for downgrade)](https://docs.databricks.com/aws/en/iceberg/iceberg-v3)
 - [Databricks: Access Databricks tables from Apache Iceberg clients](https://learn.microsoft.com/en-us/azure/databricks/external-access/iceberg)
 - [Apache Iceberg: Spark procedures (`rollback_to_snapshot`, `rollback_to_timestamp`, `set_current_snapshot`)](https://iceberg.apache.org/docs/latest/spark-procedures/)

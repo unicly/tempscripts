@@ -46,7 +46,7 @@ default storage, you can't attach AWS Backup at all. Check with `DESCRIBE CATALO
 
 | Layer | Method | Covers | Restore gives you |
 |---|---|---|---|
-| **1. In the table** | Time travel, `RESTORE TABLE … TO VERSION AS OF` ⚠️, `UNDROP` (7 days) ⚠️ | Bad writes and drops within days | The **same** table, with ID, permissions and history |
+| **1. In the table** | Time travel, `RESTORE TABLE … TO VERSION AS OF`, `UNDROP` (7 days) ⚠️ | Bad writes and drops within days | The **same** table, with ID, permissions and history |
 | **2. Logical backup (main backup)** | Incremental export to a **standard Iceberg vault**: OSS Spark reads the snapshot delta through Unity Catalog's Iceberg REST catalog and `MERGE`s into a Glue table in a **separate backup account / bucket with S3 Object Lock** | Errors found late, metastore or workspace lost, ransomware | A complete, readable table with its own point-in-time snapshots. Restore = load into a new managed table |
 | **3. File-level safety net** | **AWS Backup** on the managed storage bucket (continuous + periodic), vault in another account with Vault Lock | Bucket deleted, objects deleted or encrypted by an attacker, layer 2 failed | Raw files at time T. Restore = files back in place, or recovery through standard Iceberg (§4) |
 
@@ -91,7 +91,7 @@ through standard Iceberg, as in [`12-…md`](12-managed-iceberg-summary-aws-azur
 Don't use AWS Backup. Restoring older files doesn't change Unity Catalog's pointer, which still
 points to the bad version. Use:
 
-- `RESTORE TABLE prod.sales.orders TO VERSION AS OF <n>` ⚠️ (within retention), or
+- `RESTORE TABLE prod.sales.orders TO VERSION AS OF <n>` (within retention), or
 - the logical backup (layer 2) or a dated clone, if the retention period has passed.
 
 ## 5. Is an AWS Backup restore transparent for Databricks?
