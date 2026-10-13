@@ -40,6 +40,7 @@ directly through Glue.
 
 ## Related
 
+- [`15-add-foreign-iceberg-table-to-unity-catalog.md`](15-add-foreign-iceberg-table-to-unity-catalog.md): how to add a Glue table to Unity Catalog as a foreign table
 - [`05-cross-cloud-replication-aws-azure.md`](05-cross-cloud-replication-aws-azure.md) §2: which Iceberg variants work with Unity Catalog
 - [`07-standard-iceberg-replication-deep-dive.md`](07-standard-iceberg-replication-deep-dive.md) §1–2: standard Iceberg and catalog topology
 
