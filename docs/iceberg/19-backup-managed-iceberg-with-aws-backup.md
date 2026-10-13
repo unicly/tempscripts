@@ -94,7 +94,65 @@ points to the bad version. Use:
 - `RESTORE TABLE prod.sales.orders TO VERSION AS OF <n>` ⚠️ (within retention), or
 - the logical backup (layer 2) or a dated clone, if the retention period has passed.
 
-## 5. Settings checklist
+## 5. Is an AWS Backup restore transparent for Databricks?
+
+For the files, yes. AWS Backup restores **every object** under the bucket or prefix you choose, as it
+was at time T: `metadata.json`, manifest lists, manifests, Parquet files and deletion vectors. But it's
+only "transparent" for Databricks in one specific case. AWS Backup restores **files**, not **Unity
+Catalog**, and Unity Catalog keeps pointing wherever it points *now*.
+
+> Not tested and not documented by Databricks: reasoning from how Iceberg and Unity Catalog work (⚠️).
+
+### 5.1 When Databricks notices nothing
+
+Databricks only follows Unity Catalog's pointer to the current `metadata.json` and reads the files it
+references. If those files are back at their original paths, reads work as before.
+
+That's the case when **all of these are true**:
+
+| Condition | Why |
+|---|---|
+| The table still exists in Unity Catalog (not dropped, metastore intact) | The pointer is in Unity Catalog, not in S3 |
+| You restore to the **original bucket and paths** | The pointer and the metadata contain absolute paths |
+| The `metadata.json` Unity Catalog points to **existed at time T**, together with every file it references | Otherwise the restored set doesn't contain the current version |
+| Nothing was committed between T and the incident, or those newer files weren't damaged | See the next table |
+
+Typical example: an attacker or a script deletes objects at 14:00, and the last commit was at 11:00.
+You restore to 13:59, and the table works again.
+
+### 5.2 When it's *not* transparent
+
+| Situation | What happens |
+|---|---|
+| **Commits after time T** whose files were also lost | Unity Catalog points to a `metadata.json` created after T. AWS Backup can't bring it back because it didn't exist at T, so the table stays broken. Restore to a time *after* the last good commit (continuous backup allows any point within 35 days) |
+| **You want the table "as it was at time T"** (undo a bad write) | Restoring old files doesn't move Unity Catalog's pointer back. Databricks still shows the current (bad) version. Use `RESTORE TABLE … TO VERSION AS OF` or a backup copy instead |
+| **Snapshots were already expired** by predictive optimization | The restored data files are back, but the current `metadata.json` no longer references them. Time travel to those versions stays impossible. Only by registering an *old* `metadata.json` in another catalog (§4.2) |
+| **Table dropped or metastore lost** | No pointer exists any more. Restoring files alone doesn't bring the table back. You need the standard Iceberg route into a **new** table (§4.2) |
+
+### 5.3 Side effects to know about
+
+| Effect | Impact |
+|---|---|
+| **Files created after T are not removed** by a restore into an existing bucket ⚠️ | Old restored files and newer files sit side by side. Iceberg ignores files the current metadata doesn't reference, so reads are fine. Unreferenced files are orphans that maintenance cleans up later |
+| **No conflicts** | Iceberg file names are unique and never overwritten, so restored files can't clash with current ones |
+| **New object timestamps** (`LastModified` = restore time) | Iceberg doesn't use them for reads. Orphan cleanup uses file age, so restored orphans are only removed after its safety window |
+| **Caches** | Databricks may cache metadata or data. If queries still fail after the restore, run them on a fresh cluster or SQL warehouse ⚠️ |
+| **Encryption** | Restore with the **same KMS key** (SSE-KMS) that Unity Catalog's storage credential can use, or Databricks can't read the files |
+| **Audit** | The restore happens in AWS with an IAM role, outside Unity Catalog. Unity Catalog's audit log doesn't show it. Document it in your incident process |
+| **Permissions, tags, row filters, lineage** | Unaffected: they live in Unity Catalog, which the restore doesn't touch |
+
+### 5.4 In short
+
+| Question | Answer |
+|---|---|
+| Does AWS Backup restore everything, including `metadata.json`? | ✅ Every object under the chosen bucket or prefix, as of time T |
+| Is it transparent for Databricks? | ✅ **Only** if the table still exists in Unity Catalog and the version Unity Catalog points to was complete at time T. Then Databricks reads normally and notices nothing |
+| Can it roll the table back in time? | ❌ Unity Catalog's pointer isn't restored. For "undo", use time travel / `RESTORE` or a backup copy |
+| Can it bring back a dropped table? | ❌ Not directly. Only through the standard Iceberg route into a new table |
+
+So AWS Backup is a **repair tool for lost or damaged files**, not a time machine for the table.
+
+## 6. Settings checklist
 
 | Setting | Why |
 |---|---|
@@ -106,7 +164,7 @@ points to the bad version. Use:
 | `delta.deletedFileRetentionDuration` / retention long enough for daily mistakes | Layer 1 covers most incidents without any restore |
 | A **test restore** at least once (scenarios A and B) | None of the managed-table restore paths are documented by Databricks |
 
-## 6. In short
+## 7. In short
 
 | Question | Answer |
 |---|---|
