@@ -113,6 +113,10 @@ and reset any replication watermark or streaming checkpoint.
   the other cloud through OpenSharing.
 - Turn on storage versioning as an extra safety net.
 
+## Related
+
+- [`02-backup-delta-with-aws-backup.md`](02-backup-delta-with-aws-backup.md): AWS Backup for Delta tables, and whether a restore is transparent for Databricks
+
 ## Sources
 
 - [Databricks: Work with table history (time travel, RESTORE, retention)](https://docs.databricks.com/aws/en/tables/history)
