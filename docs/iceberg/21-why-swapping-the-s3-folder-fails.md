@@ -100,6 +100,7 @@ A, copy it through Unity Catalog with a clone or `INSERT OVERWRITE`. Swapping fi
 
 ## Related
 
+- [`22-copying-folder-into-recreated-table-works.md`](22-copying-folder-into-recreated-table-works.md): a related case that **did** work in practice (copying a table's own old folder into its recreated table), with checks to explain why
 - [`14-managed-vs-standard-files-and-control-plane.md`](14-managed-vs-standard-files-and-control-plane.md): same files, different control plane
 - [`16-managed-iceberg-on-aws-glue-storage.md`](16-managed-iceberg-on-aws-glue-storage.md): where the table is stored, one owner per table
 - [`08-incremental-rewrite-table-path-explained.md`](08-incremental-rewrite-table-path-explained.md): why Iceberg paths are absolute and how they're rewritten
