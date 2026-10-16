@@ -37,7 +37,7 @@ s3://…/orders/
 |---|---|---|---|
 | **Time travel** | Read an old version | `SELECT * FROM orders VERSION AS OF 40` / `TIMESTAMP AS OF '2026-10-12'` | Files must still exist (see retention below) |
 | **`RESTORE`** | Roll the table back in place, as a new version | `RESTORE TABLE orders TO VERSION AS OF 40` | Same. The restore can itself be undone with another `RESTORE` |
-| **`UNDROP`** (managed tables) | Recover a dropped managed table, with its history | `UNDROP TABLE orders` | 7 days. The data is deleted after 8 days |
+| **`UNDROP`** (managed tables) | Recover a dropped managed table, with its history | `UNDROP TABLE orders` | Recovery window **7 days by default, configurable at catalog or schema level**. Afterwards the files are purged (S3 versioning can still keep them) |
 | **History** | See who changed what | `DESCRIBE HISTORY orders` | `delta.logRetentionDuration` (default 30 days) |
 
 **How far back you can go** depends on two table properties:
@@ -85,7 +85,7 @@ moment when no writes happen.
 | Situation | Restore with |
 |---|---|
 | Bad `UPDATE`/`DELETE`/`MERGE` within retention | `RESTORE TABLE … TO VERSION AS OF n` |
-| Table dropped (managed, ≤ 7 days) | `UNDROP TABLE` |
+| Table dropped (managed, within the recovery window) | `UNDROP TABLE` |
 | Table dropped (external) | Files are still there: `CREATE TABLE … LOCATION '…'` |
 | Error found after retention | From the backup clone: `CREATE OR REPLACE TABLE prod DEEP CLONE backup.orders VERSION AS OF n` |
 | Storage, region or cloud lost | Backup clone on the other cloud or region, shared back or cloned |
@@ -105,6 +105,14 @@ and reset any replication watermark or streaming checkpoint.
 | File copy works at a new location | ✅ Relative paths | ❌ Absolute paths, and no registration |
 | Storage-level restore | ✅ External tables / ⚠️ managed via external + clone | ⚠️ Only via standard Iceberg tools (doc 12 §2.3) |
 
+## Region loss: Databricks managed disaster recovery
+
+Databricks offers **managed disaster recovery**: continuous replication of Unity Catalog metadata,
+managed table data and workspace assets to another region, with failover from the account console.
+It's Databricks' recommended option for cross-region recovery on AWS and Azure. Writes from external
+engines through open APIs may not be captured. It doesn't replace backups against bad writes or
+deliberate deletion, which are replicated too.
+
 ## Recommended setup
 
 - Raise the retention properties to the window you need for everyday mistakes. `RESTORE` and
@@ -115,9 +123,15 @@ and reset any replication watermark or streaming checkpoint.
 
 ## Related
 
+- [`03-restore-delta-from-aws-backup-to-new-folder.md`](03-restore-delta-from-aws-backup-to-new-folder.md): restoring from AWS Backup to a new folder (updated October 2026)
 - [`02-backup-delta-with-aws-backup.md`](02-backup-delta-with-aws-backup.md): AWS Backup for Delta tables, and whether a restore is transparent for Databricks
 
 ## Sources
+
+- [Databricks: UNDROP](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-ddl-undrop-table)
+- [Databricks: Object storage lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/object-storage-lifecycle)
+- [Databricks: Managed disaster recovery](https://docs.databricks.com/aws/en/admin/managed-disaster-recovery)
+- [Databricks: Disaster recovery](https://docs.databricks.com/aws/en/admin/disaster-recovery)
 
 - [Databricks: Work with table history (time travel, RESTORE, retention)](https://docs.databricks.com/aws/en/tables/history)
 - [Databricks: Clone a table on Databricks](https://docs.databricks.com/aws/en/tables/operations/clone)

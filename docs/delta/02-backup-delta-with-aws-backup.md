@@ -12,6 +12,12 @@ answered for **Delta tables** on Databricks (managed and external):
 > Based on AWS and Databricks documentation and general Delta behaviour. Not tested. ⚠️ marks points
 > to verify, especially restores into Unity Catalog managed storage, which Databricks doesn't document.
 
+> **Update (October 2026):** re-checked against current Databricks docs. Changes: catalog commits
+> are now generally available (off by default); path-based writes into managed storage are
+> unsupported, so in-place restores into managed storage are a last resort; `ALTER TABLE … SET MANAGED`
+> converts a restored external table back to managed; the `UNDROP` window is configurable; and
+> Databricks managed disaster recovery covers region loss.
+
 ## Short answer
 
 AWS Backup works **better for Delta than for managed Iceberg**, for two reasons:
@@ -67,6 +73,12 @@ Compared with managed Iceberg, layer 2 is much cheaper here: deep clones of Delt
 The same caveats as §5 apply: this works when the log and the files of the latest version existed at
 time T.
 
+⚠️ **For managed tables this is a last resort.** Databricks doesn't support path-based access to
+managed tables (it bypasses Unity Catalog and "might result in data corruption"), and advises against
+several writers modifying the same Delta table in S3. Writing restored files into managed storage is
+exactly that. **Preferred:** restore to a new location and rebuild the table as in scenario B. For
+external tables, in-place restore is fine.
+
 ### 3.2 Scenario B: managed table dropped (> 8 days) or metastore lost
 
 Much simpler than for Iceberg, because the folder is a self-contained Delta table:
@@ -76,10 +88,19 @@ Much simpler than for Iceberg, because the folder is a self-contained Delta tabl
 | 1 | Restore the table's prefix from AWS Backup to a **new bucket or prefix** that is a Unity Catalog **external location** (not inside managed storage, which Unity Catalog won't accept for external tables) | AWS Backup |
 | 2 | Register it as an external table: `CREATE TABLE restore.sales.orders_tmp USING DELTA LOCATION 's3://restore-bucket/orders/'` | Databricks |
 | 3 | Check: `DESCRIBE HISTORY` (the full history up to time T is there), counts, queries | Databricks |
-| 4 | Make it managed again: `CREATE TABLE prod.sales.orders DEEP CLONE restore.sales.orders_tmp` (or keep it external) | Databricks |
+| 4 | Make it managed again: **`ALTER TABLE restore.sales.orders_tmp SET MANAGED`** (documented conversion of external Delta tables to managed ⚠️ check history behaviour), then rename it into place. Or `CREATE TABLE prod.sales.orders DEEP CLONE restore.sales.orders_tmp`. Or keep it external | Databricks |
 | 5 | Re-apply grants, tags, row filters and column masks. Reset streaming checkpoints and replication watermarks | Databricks |
 
-⚠️ Not documented by Databricks for managed tables. Test it once.
+⚠️ Not documented by Databricks as a backup procedure. Test it once. If the table had **catalog
+commits** enabled, the restored folder may not contain the newest commits (§5).
+
+**Before the purge:** a dropped managed table can be recovered with `UNDROP` within the recovery
+window (default **7 days**, configurable at catalog or schema level). After the purge, the files can
+still exist in S3 if **versioning** or lifecycle rules keep them, which is what this scenario relies on.
+
+**Region lost:** Databricks **managed disaster recovery** replicates Unity Catalog metadata and managed
+table data to another region. It's Databricks' recommended option for cross-region recovery. Writes
+from external engines through open APIs may not be captured.
 
 ### 3.3 Scenario C: external Delta table
 
@@ -115,7 +136,7 @@ That's the case when **all of these are true**:
 | The table is still registered in Unity Catalog | The name → location mapping and the permissions are in Unity Catalog |
 | You restore to the **original bucket and path** | Unity Catalog points to that location |
 | The log and data files of the **latest version** existed at time T, or weren't damaged | Otherwise the restored log is missing the newest commits (see below) |
-| ⚠️ **Catalog-managed commits** are not enabled for the table | With this newer feature (Public Preview), Unity Catalog coordinates commits and may hold the latest ones itself. The log in S3 alone is then not the full picture |
+| **Catalog commits** are not enabled for the table | Catalog commits (table feature `delta.feature.catalogManaged`) are **generally available**, but **off by default**. When enabled, Unity Catalog coordinates commits and may hold the newest ones before they're written to `_delta_log/`. The log in S3 alone is then not the full picture ⚠️. Check with `SHOW TBLPROPERTIES <table>`. Needs DBR 16.4+ to read/write, 18.0+ to enable or disable |
 
 Typical example: objects are deleted at 14:00, the last commit was at 11:00. You restore to 13:59, and
 the table works again.
@@ -147,7 +168,7 @@ the table works again.
 
 | | Delta | Managed Iceberg |
 |---|---|---|
-| Current version decided by | The log in S3 (⚠️ unless catalog-managed commits) | Unity Catalog's pointer |
+| Current version decided by | The log in S3 (unless catalog commits are enabled) | Unity Catalog's pointer |
 | Restore in place when files were lost | ✅ Works | ✅ Works, if the pointed-to version existed at T |
 | Missing newest commits after a restore | Table silently goes back to an older version | Table is broken (pointer to a missing `metadata.json`) |
 | Restore to a **new** location | ✅ Directly usable (`CREATE TABLE … LOCATION`), full history kept | ⚠️ Only via standard Iceberg tools (register in Glue / PyIceberg), then copy into a new table |
@@ -165,6 +186,14 @@ the table works again.
 | Can it undo a bad write? | ❌ Use `RESTORE TABLE … TO VERSION AS OF` |
 
 ## Sources
+
+- [Databricks: Catalog commits](https://learn.microsoft.com/en-us/azure/databricks/tables/features/catalog-commits)
+- [Databricks blog: Catalog commits is generally available](https://www.databricks.com/blog/convergence-open-table-formats-and-open-catalogs-catalog-commits-generally-available)
+- [Databricks: Convert external or foreign Delta Lake tables to Unity Catalog managed tables](https://docs.databricks.com/aws/en/tables/convert-to-managed)
+- [Databricks: Access Databricks tables from Delta clients (path-based access to managed tables)](https://docs.databricks.com/aws/en/external-access/unity-rest)
+- [Databricks: Managed disaster recovery](https://docs.databricks.com/aws/en/admin/managed-disaster-recovery)
+- [Databricks: Object storage lifecycle in Unity Catalog](https://docs.databricks.com/aws/en/data-governance/unity-catalog/object-storage-lifecycle)
+- [Databricks: UNDROP](https://docs.databricks.com/aws/en/sql/language-manual/sql-ref-syntax-ddl-undrop-table)
 
 - [AWS Backup: Amazon S3 backups](https://docs.aws.amazon.com/aws-backup/latest/devguide/s3-backups.html)
 - [AWS Backup: Restoring a continuous backup](https://docs.aws.amazon.com/aws-backup/latest/devguide/point-in-time-recovery-restoring.html)
