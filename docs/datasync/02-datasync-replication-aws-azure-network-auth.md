@@ -107,6 +107,60 @@ destination swapped.
 - **One endpoint type for life:** to switch from the public endpoint to a VPC endpoint, deploy a new agent.
 - **Costs:** the VM itself (Azure or EC2), on top of the DataSync per-GB fees and egress.
 
+## Many replications: one agent per replication, or shared agents?
+
+**Short answer:** you **don't** need an agent (or a VM) per replication. One agent can be used by many
+locations and tasks. But **one VM runs exactly one agent**, and an agent runs **one task at a time**:
+other tasks that use the same agent wait in a **queue** ⚠️. Plan the number of agents by **parallelism,
+throughput, network reach and AWS account/region**, not by the number of replications.
+
+### How agents, locations and tasks relate
+
+```
+VM (Azure)  ──  1 agent  ──┬── Azure Blob location: container "sales"     ── task 1: S3 sales/   → Azure sales/
+                           ├── Azure Blob location: container "finance"   ── task 2: S3 finance/ → Azure finance/
+                           └── Azure Blob location: container "hr"        ── task 3: Azure hr/   → S3 hr/
+                                        (tasks using this agent run one after another)
+```
+
+| Question | Answer |
+|---|---|
+| One agent for several replications? | ✅ Yes. Reference the same agent in several locations and tasks |
+| Several tasks at the same time on one agent? | ❌ No: one task per agent at a time. Further tasks are **queued** ⚠️ (check current behaviour for Enhanced mode) |
+| Several agents on one VM? | ❌ No. The VM **is** the agent appliance: one VM = one agent |
+| One agent for several AWS accounts or regions? | ❌ No. An agent is activated for **one account, one region and one endpoint type** |
+| Several agents for one replication? | ✅ Yes, up to 4 per location ⚠️, for more throughput and resilience |
+
+### When you need more agents (and VMs)
+
+| Reason | Why |
+|---|---|
+| **Replications must run in parallel** | One agent runs one task at a time. Two agents = two tasks at the same time |
+| **More throughput** for large transfers | Several agents on one location share the work of one task |
+| **Different AWS accounts or regions** | An agent is tied to one account and region |
+| **Different endpoint types** | Public and VPC endpoint agents can't be mixed on one agent |
+| **Network reach** | The agent must reach every storage account it serves (same VNet, peering, private endpoints and DNS). Storage in isolated networks needs its own agent |
+| **Resilience** | A single agent is a single point of failure for all its tasks |
+| **Very many files** | Large file counts need more agent memory (⚠️ ~64 GB for tens of millions of files) |
+
+### Typical layouts
+
+| Situation | Layout |
+|---|---|
+| A few replications, runs can wait for each other (e.g. nightly) | **1 agent VM** in Azure, shared by all tasks. Stagger the schedules |
+| Many replications that must finish in the same time window | **2–4 agent VMs**. Spread tasks across agents, or attach several agents to the busiest locations |
+| Both directions (AWS → Azure and Azure → AWS) | The **same agents** can serve both directions, if they're in the same AWS account and region |
+| Several AWS accounts or regions | **At least one agent per account/region** combination |
+
+### Tips
+
+- **Split large replications into several tasks** by prefix (e.g. per table or partition folder) and
+  spread them across agents.
+- **Stagger schedules** so queued tasks don't pile up on one agent.
+- **Monitor** task duration and queue time in CloudWatch. Add an agent when tasks start overlapping
+  their schedule window.
+- **Size the VM** for the biggest task it will run (memory for file counts, network for throughput).
+
 ## Limits to know
 
 - **Files only:** DataSync doesn't understand tables. Copy Delta's `_delta_log` last, and rewrite
@@ -122,6 +176,8 @@ destination swapped.
 - [AWS DataSync: Deploying your agent](https://docs.aws.amazon.com/datasync/latest/userguide/deploy-agents.html)
 - [AWS DataSync: CreateLocationAzureBlob API (SAS authentication)](https://docs.aws.amazon.com/datasync/latest/userguide/API_CreateLocationAzureBlob.html)
 - [AWS DataSync FAQs](https://www.amazonaws.cn/en/datasync/faqs/)
+- [AWS DataSync: Queueing tasks (multiple tasks on one agent)](https://docs.aws.amazon.com/datasync/latest/userguide/run-task.html)
+- [AWS DataSync: Using multiple agents for a location](https://docs.aws.amazon.com/datasync/latest/userguide/multiple-agents.html)
 - [AWS Storage blog: Best practices for setting up your DataSync agent](https://aws.amazon.com/blogs/storage/best-practices-for-setting-up-your-aws-datasync-agent/)
 - [aws-samples: Deploy DataSync agent on Azure](https://github.com/aws-samples/aws-datasync-deploy-agent-azure/blob/main/README.md)
 - [AWS What's New: Enhanced mode adds Azure Blob and Hyper-V agent support](https://aws.amazon.com/about-aws/whats-new/2026/07/aws-datasync-hdfs-azure-blob-hyper-v/)
