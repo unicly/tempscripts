@@ -85,6 +85,7 @@ storage is an unsupported path-based write. See
 
 ## Related
 
+- [`05-restore-managed-delta-table-after-accidental-delete.md`](05-restore-managed-delta-table-after-accidental-delete.md): the same case for a **managed** table
 - [`03-restore-delta-from-aws-backup-to-new-folder.md`](03-restore-delta-from-aws-backup-to-new-folder.md): restoring to another folder
 - [`../aws-backup/01-aws-backup-options-overview.md`](../aws-backup/01-aws-backup-options-overview.md): AWS Backup options
 - [`../unity-catalog/01-managed-and-external-tables-sql.md`](../unity-catalog/01-managed-and-external-tables-sql.md): declaring external tables
