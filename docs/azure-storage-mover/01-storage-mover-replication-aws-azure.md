@@ -4,8 +4,12 @@ The same questions as for AWS DataSync ([`../datasync/02-…md`](../datasync/02-
 and Azure Data Factory ([`../azure-data-factory/01-…md`](../azure-data-factory/01-adf-replication-aws-azure.md)),
 answered for **Azure Storage Mover**.
 
-> From Microsoft docs, announcements and blog walkthroughs. Not tested. Several details (private
-> networking, limits, copy modes) are **inconsistent between sources** and marked ⚠️.
+> From Microsoft docs, announcements and blog walkthroughs. Not tested. ⚠️ marks unconfirmed details.
+>
+> **Correction (October 2026):** an earlier version said private networking for S3 → Azure was
+> unclear and a VPN didn't apply. Microsoft's docs describe **private connections**: Storage Mover can
+> migrate S3 → Azure privately over Azure Private Link and a VPN / ExpressRoute / SD-WAN link. Older
+> blogs saying "no private networking" predate or ignore this feature.
 
 ## Short answer
 
@@ -14,8 +18,10 @@ answered for **Azure Storage Mover**.
 - **S3 → Azure Blob:** ✅ **cloud-to-cloud**, generally available since October 2025, **agentless**
   (Azure-managed, server to server), authenticated through an **Azure Arc multicloud connector** for AWS.
 - **Azure → S3:** ❌ not supported. Storage Mover only writes to Azure targets.
-- **Private network:** ⚠️ unclear for S3. Pre-GA sources say no private networking (S3 access is limited
-  to Azure IP ranges instead), a later summary mentions Private Link. Check the current docs.
+- **Private network:** ✅ possible with **private connections**: Storage Mover → Azure Private Link →
+  **Private Link Service Direct Connect** → VPN / ExpressRoute / SD-WAN → **S3 VPC endpoint**. Depends on
+  Private Link Service Direct Connect, which is ⚠️ **in public preview, in selected regions only**.
+  Without it, transfers use public endpoints (S3 restricted to Azure IP ranges).
 - **Agent VM:** only for **on-premises / file-share** sources (SMB, NFS). Not needed for S3.
 
 ## Directions
@@ -50,14 +56,39 @@ from an automation tool.
 
 | Part | Path |
 |---|---|
-| **S3 → Azure data transfer** (cloud-to-cloud) | Azure-managed service reads from S3's **endpoint** and writes to Azure. ⚠️ Pre-GA docs: **no private networking**; restrict the bucket to **Azure IP ranges** instead. A later summary mentions Private Link. Not confirmed |
+| **S3 → Azure data transfer, public** (default) | Azure-managed service reads from S3's **public endpoint** (HTTPS). Restrict the bucket to **Azure IP ranges** |
+| **S3 → Azure data transfer, private connection** | Storage Mover → **private endpoint** → **Private Link Service Direct Connect** (your Azure network) → **VPN / ExpressRoute / SD-WAN** → **S3 VPC endpoint** in AWS. Off the public internet (see "Private connections" below) |
 | Write to the target storage account | Can use **Private Link** to the storage account (documented for agent-based migrations) ⚠️ |
 | Control messages, progress, copy logs | Go over the **public endpoint** of the Storage Mover resource, even with Private Link |
-| **VPN** | ❌ Not applicable for cloud-to-cloud: there's no agent in your network to route through a VPN. Agent-based migrations (on-premises sources) can use your network path |
+| **VPN** | ✅ For private connections, a **VPN, ExpressRoute or SD-WAN** between Azure and AWS is the network path. Agent-based migrations (on-premises sources) use your network path as well |
 
-So for S3 → Azure, the realistic assumption today is: **data crosses between AWS and Azure over their
-public endpoints (HTTPS)**, with access limited to Azure's IP ranges. If a fully private path is
-required, use **AWS DataSync** with an agent in Azure, or **ADF** with a self-hosted IR.
+## Private connections (S3 → Azure over Private Link)
+
+```
+Storage Mover (Azure-managed)
+  └─ private endpoint → Private Link Service Direct Connect (IP-based, in your Azure VNet/region)
+        ▼  VPN / ExpressRoute / SD-WAN
+AWS VPC
+  └─ S3 VPC endpoint → S3 bucket (bucket / endpoint policy: only this endpoint)
+```
+
+| Step | What |
+|---|---|
+| 1 | **AWS:** create an **S3 VPC endpoint** in the VPC that holds the bucket. Optionally limit the bucket / endpoint policy to it |
+| 2 | **Network:** connect the Azure VNet and that VPC with **VPN, ExpressRoute or SD-WAN**. The Private Link Service's source NAT subnet needs connectivity to the AWS VPC ⚠️ |
+| 3 | **Azure:** create a **Private Link Service Direct Connect** (IP-based Private Link Service) pointing to the **S3 VPC endpoint's IP address** ⚠️, in the **same region** as the Storage Mover resource and the VNet that reaches AWS ⚠️. It **can't be created inside Storage Mover** and must exist **before** the private connection |
+| 4 | **Storage Mover:** create a **private connection** using that Private Link Service, then **approve** it. The feature may have to be enabled through a portal flight link ⚠️ |
+| 5 | **Multicloud connector / endpoint:** choose the **private** access type |
+| 6 | **Job:** set the **S3 bucket type to "Private"** and select the approved private connection |
+
+| Point | Detail |
+|---|---|
+| Status | **Private Link Service Direct Connect is in public preview, in selected regions only** ⚠️ (Tech Community). Check your region |
+| Bucket check | Storage Mover **doesn't validate** whether the bucket is public or private. Configure the bucket policy yourself |
+| Mapping | The Private Link Service must **map to the VPC** associated with the S3 resource |
+| Subnet settings ⚠️ | A lab mentions the Private Link Service subnet needs Private Link service network policies **disabled** and **at least two IP configurations** (possibly lab-specific) |
+| Control traffic | Control messages, progress telemetry and copy logs still go over the **public endpoint** of the Storage Mover resource |
+| Not found yet | A complete step-by-step guide and a region list. Verify the ⚠️ points on the Microsoft Learn page |
 
 ## Authentication
 
@@ -92,7 +123,7 @@ S3, plus Azure storage and transactions on the target.
 | AWS → Azure | ✅ | ✅ Copy activity | ✅ Cloud-to-cloud (GA) |
 | Azure → AWS | ✅ | ⚠️ Mapping data flows only | ❌ |
 | Agent / runtime | Agent VM (optional with Enhanced mode) | Self-hosted IR (Windows) or Azure IR | **None** for S3 (agent only for on-prem) |
-| Private path | ✅ Agent + VPC endpoint + VPN | ✅ SHIR + S3 VPC endpoint + VPN | ⚠️ Not confirmed (Azure IP allow-listing) |
+| Private path | ✅ Agent + VPC endpoint + VPN | ✅ SHIR + S3 VPC endpoint + VPN | ✅ Private connection: Private Link Service Direct Connect (⚠️ preview, selected regions) + VPN / ExpressRoute + S3 VPC endpoint |
 | Auth to AWS | IAM role (S3), SAS (Azure) | Access keys for S3 | Arc multicloud connector (IAM role) |
 | Recurring / incremental | ✅ Scheduled tasks, changed files only | ✅ Triggers, last-modified filters | ⚠️ Re-run jobs; built for migration |
 | Service cost | Per GB | Per activity / DIU-hour | Free ⚠️ (egress and storage still apply) |
@@ -103,10 +134,18 @@ S3, plus Azure storage and transactions on the target.
 |---|---|
 | One-off or few-pass **migration S3 → Azure**, no infrastructure to run | **Azure Storage Mover** |
 | **Recurring** replication S3 → Azure | AWS DataSync or ADF Copy activity |
-| **Private** network required | AWS DataSync (agent + VPC endpoint) or ADF (SHIR) |
+| **Private** network required | AWS DataSync (agent + VPC endpoint), ADF (SHIR), or Storage Mover with a **private connection** (migrations into Azure, if Private Link Service Direct Connect is available in your region) |
 | **Azure → S3** | AWS DataSync |
 
 ## Sources
+
+- [Microsoft: Migrate data using private connections in Azure Storage Mover](https://learn.microsoft.com/en-us/azure/storage-mover/migrations-requiring-private-connections)
+- [Microsoft: Azure private network connectivity options for cloud-to-cloud (ExpressRoute, VPN, SD-WAN)](https://learn.microsoft.com/en-us/azure/storage-mover/cloud-to-cloud-private-network-configuration)
+- [Microsoft: Get started with cloud-to-cloud migration in Azure Storage Mover](https://learn.microsoft.com/en-us/azure/storage-mover/cloud-to-cloud-migration)
+- [Microsoft: Azure Storage Mover networking requirements](https://learn.microsoft.com/en-us/azure/storage-mover/network-prerequisites)
+- [Microsoft Tech Community: Private Link Service Direct Connect (preview)](https://techcommunity.microsoft.com/blog/azurearchitectureblog/preserve-a-legacy-ip-during-azure-migration-with-private-link-service-direct-con/4540575)
+- [Microsoft Tech Community: SAP RISE & HANA data migration, S3 to Azure Blob via Storage Mover](https://techcommunity.microsoft.com/blog/microsoftmissioncriticalblog/sap-rise--hana-data-migration-aws-s3-to-azure-blob-storage-via-azure-storage-mov/4487991)
+- [DevOpsSchool: Azure Storage Mover tutorial](https://www.devopsschool.com/tutorials/azure-storage-mover-tutorial-architecture-pricing-use-cases-and-hands-on-guide-for-migration/)
 
 - [Microsoft: Azure Storage Mover service overview (supported source/target pairs)](https://learn.microsoft.com/azure/storage-mover/service-overview)
 - [Azure blog: Fully managed cloud-to-cloud transfers with Azure Storage Mover](https://azure.microsoft.com/en-us/blog/fully-managed-cloud-to-cloud-transfers-with-azure-storage-mover/)
