@@ -16,9 +16,13 @@ folder; you choose the bucket at the **schema, catalog or metastore** level.
 | Order | Level | Set with | Example |
 |---|---|---|---|
 | 1 | **Schema** managed location | `CREATE SCHEMA … MANAGED LOCATION 's3://…'` | `s3://finance-bucket/uc/ledger/` |
-| 2 | **Catalog** managed location | `CREATE CATALOG … MANAGED LOCATION 's3://…'` | `s3://finance-bucket/uc/` |
+| 2 | **Catalog** managed location, or **Databricks default storage** | `CREATE CATALOG … MANAGED LOCATION 's3://…'`, or the **"Default storage"** option chosen explicitly when creating the catalog (serverless workspaces only) | `s3://finance-bucket/uc/`, or storage in **Databricks' account** |
 | 3 | **Metastore** storage root | Set by the account admin (optional on newer metastores) | `s3://uc-root-bucket/metastore/` |
-| 4 | **Databricks default storage** | Used when none of the above is set (newer accounts, serverless) | Storage in **Databricks' account**, not yours |
+
+> **Correction (October 2026):** an earlier version listed default storage as a fallback "when none of
+> the above is set". It isn't: default storage is a **choice made when creating the catalog**. A catalog
+> created without a location and without that choice inherits the **metastore storage root**, which
+> may be your bucket. See [`../delta/07-…md`](../delta/07-create-delta-table-on-databricks-default-storage.md).
 
 ## What the folder looks like
 
@@ -61,8 +65,8 @@ DESCRIBE CATALOG EXTENDED main;               -- the catalog's storage root
 ## In short
 
 A managed table lives in a Unity Catalog-generated folder under the managed location of its
-**schema, catalog or metastore**, in that order. If none is set, it's in Databricks **default
-storage**. Use `DESCRIBE TABLE EXTENDED` to see the exact path. For backups with AWS Backup, make sure
+**schema, catalog or metastore**, in that order. It's only in Databricks **default storage** if the
+catalog was explicitly created on default storage (serverless workspaces). Use `DESCRIBE TABLE EXTENDED` to see the exact path. For backups with AWS Backup, make sure
 your catalogs or schemas point to **your own bucket**
 ([`../iceberg/19-…md`](../iceberg/19-backup-managed-iceberg-with-aws-backup.md)).
 
