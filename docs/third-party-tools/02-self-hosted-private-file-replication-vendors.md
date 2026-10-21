@@ -1,12 +1,12 @@
 # Self-hosted file replication between AWS and Azure in a private network: vendor research
 
-Research on 6 vendors for **file replication between S3 and Azure Blob / ADLS**, with two hard requirements:
+Research on 6 products for **file replication between S3 and Azure Blob / ADLS**, with two hard requirements:
 
 1. **Self-hosted:** runs on **your own infrastructure** (VMs or containers in your VPC / VNet / data center).
 2. **Private network:** data does **not** go over the public internet (VPN or ExpressRoute ⇄ Direct Connect,
    S3 interface/gateway endpoints, Azure Private Endpoints).
 
-Vendors: CData (Sync and **Arc**), Signiant, Flexify, Resilio, Coviant Software, NetApp.
+Vendors: CData **Arc**, Signiant, Flexify, Resilio, Coviant Software, NetApp.
 
 > From vendor docs, vendor marketing and third-party articles (October 2026). Not tested. ⚠️ marks points that
 > weren't confirmed or come only from vendor marketing. Confirm with each vendor before deciding (see the
@@ -22,11 +22,10 @@ Vendors: CData (Sync and **Arc**), Signiant, Flexify, Resilio, Coviant Software,
 | **Coviant Diplomat MFT** | ✅ Windows / Linux servers | ✅ Runs in your network | ✅ S3 and Azure Blob connectors | ✅ | No (self-contained) | ⚠️ For scheduled transfer jobs, not data-lake scale |
 | **Signiant Jet / SDCX Server** | Partly: SDCX servers yours, platform is SaaS | ⚠️ Private-network SDCX deployment from v7.3.1 (June 2026). **Cloud-to-cloud transfers coordinated by Signiant-hosted servers** | ⚠️ S3 and Blob, but **ADLS (hierarchical namespace) not supported** | ✅ | **Yes** (SaaS control) | ❌ Weak |
 | **CData Arc** | ✅ On-premises or private cloud (Windows / Java). Connectors can also run in **Docker** | ✅ Runs in your network ⚠️ (private endpoints to check) | ✅ **S3 connector** + **Azure Blob connector** in one flow, both directions | ✅ (files staged on the Arc server) | No | ⚠️ Like Coviant: job-based file flows, not data-lake scale |
-| **CData Sync** | ✅ Windows / Linux (Java), or marketplace VMs | ✅ Runs in your network | ⚠️ S3 ↔ Azure (Blob/ADLS) as **data** sources/destinations | ❌ Replicates **data** (CSV, Parquet, Avro output), not the original files | No | ❌ Not for file replication |
 
 **Shortlist:** **NetApp Copy and Sync** and **Resilio Active Everywhere**, then **Flexify.IO**. **Coviant
-Diplomat MFT** or **CData Arc** if your volumes are moderate and job-based. Signiant and CData Sync
-don't fit file replication between S3 and Azure in a private network.
+Diplomat MFT** or **CData Arc** if your volumes are moderate and job-based. Signiant
+doesn't fit file replication between S3 and Azure in a private network.
 
 ## Details per vendor
 
@@ -104,16 +103,6 @@ don't fit file replication between S3 and Azure in a private network.
 | Private network | ✅ Arc runs in your network. ⚠️ Check that the S3 connector can use an **S3 interface/VPC endpoint URL** and that Azure Blob works through a **Private Endpoint** (private DNS). ⚠️ Auth options (IAM role vs. keys, managed identity vs. key/SAS) to check |
 | Fit | ⚠️ Polling + staging on the server: fine for **moderate volumes** and business file flows. Not built to sync **millions of files** or mirror deletes in a data lake. Don't enable "delete after download" on the source unless you want a move |
 | Verdict | ✅ Possible for job-based file flows, same category as Coviant Diplomat MFT |
-
-### CData Sync
-
-| Topic | Finding |
-|---|---|
-| What it is | **Data replication / ETL**: reads data from sources and writes it to destinations |
-| Deployment | ✅ Self-hosted: Windows service (.NET or Java edition), Linux (Java, JDK 11+), or VMs from AWS / Azure Marketplace |
-| S3 ⇄ Azure | Azure Blob / ADLS destinations (CSV, Parquet, Avro; auth: Entra ID, service principal, managed identity, key, SAS). S3 as a destination |
-| Fit | ❌ Replicates **data into files it generates**, not the original files byte for byte |
-| Verdict | ❌ Not for file replication. Use **CData Arc** for files |
 
 ## Recommended next steps
 
@@ -198,8 +187,3 @@ don't fit file replication between S3 and Azure in a private network.
 - [CData Arc: application and data connectors](https://arc.cdata.com/apps/)
 - [CData Arc: secure managed file transfer](https://arc.cdata.com/mft/)
 - [CData Arc: scalable file transfer](https://arc.cdata.com/mft/scalability/)
-- [CData Sync: Azure Blob destination](https://cdn.cdata.com/help/ASJ/sync/Azure-Blob-Destination.html)
-- [CData Sync: Cross-platform (Java) edition](https://cdn.cdata.com/help/ASJ/sync/Java-Edition.html)
-- [CData Sync: Installation and configuration](https://cdn.cdata.com/help/ASH/sync/Installation-Configuration.html)
-- [CData KB: S3 to Azure Data Lake](https://www.cdata.com/kb/tech/s3-sync-azuredatalake.rst)
-- [CData KB: Azure Blob to S3](https://www.cdata.com/kb/tech/azureblobstorage-sync-s3.rst)
