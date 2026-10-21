@@ -82,6 +82,30 @@ agent in Azure** and connect it to AWS through a **DataSync VPC endpoint**. Don'
 - ⚠️ The agent VM still needs **outbound** access for activation and updates. Limit it to the VPC endpoint IPs
   and the ports listed on the AWS *network requirements* page.
 
+## Agentless Enhanced mode: can it be private?
+
+**No.** I found no AWS documentation of a way to make **agentless** Enhanced mode private. For a
+no-public-internet requirement, use the **agent** setup above.
+
+| Point | Agentless Enhanced mode |
+|---|---|
+| Who connects to Azure | The **DataSync service itself**, running in AWS's own network rather than in your VPC. It reads Azure Blob directly over **HTTPS** and authenticates with a **SAS token** (can be stored in Secrets Manager) |
+| Which Azure endpoint | The storage account's **public endpoint** (`*.blob.core.windows.net`). An Azure Private Endpoint is only reachable from your own networks (VNet, VPN, ExpressRoute), and the DataSync service isn't in any of them |
+| VPC endpoint (PrivateLink) | ❌ Not applicable. `PrivateLinkConfig` belongs to an **agent**. For cross-cloud transfers without an agent, no agent ARNs are set, so there's nothing to attach an endpoint to |
+| Storage account with public access **disabled** | ❌ The service can't reach the storage account |
+| Azure firewall with an IP allowlist | ⚠️ Not documented. No published list of the IP addresses agentless DataSync connects from was found. Even if allowlisted, traffic still uses public endpoints (TLS-encrypted, but not private) |
+| Data on the S3 side | Stays inside AWS. Only the Azure leg is public |
+| Other limits (AWS blog) | Objects larger than **5 TB** or with metadata larger than **2 KB** aren't transferred to S3 |
+
+**Private alternative:** an **Enhanced mode agent** (Hyper-V image, since July 2026) in your Azure VNet:
+
+- **Agent → AWS:** VPN or ExpressRoute ⇄ Direct Connect, through the **DataSync VPC endpoint**.
+- **Agent → Azure storage:** **Azure Private Endpoint**, with the storage account's public network access disabled.
+
+⚠️ AWS doesn't say outright that agentless mode can't be private. The conclusion comes from how it works:
+the service connects over HTTPS, and VPC endpoints apply only to agents. Ask **AWS Support** to confirm, and
+to say whether agentless DataSync uses fixed IP addresses.
+
 ## What it means for a scalable data lake setup
 
 | Topic | Effect of Enhanced mode |
@@ -135,6 +159,10 @@ aws datasync create-task \
 - [aws-samples: deploy a DataSync agent on Azure](https://github.com/aws-samples/aws-datasync-deploy-agent-azure)
 - [Medium: syncing Azure Blob to S3 privately with DataSync (third party)](https://medium.com/allocore/syncing-data-privately-from-azure-blob-storage-to-amazon-s3-using-aws-datasync-138d46535273)
 - [AWS blog: Simplify multicloud data movement with DataSync](https://aws.amazon.com/blogs/storage/simplify-multicloud-data-movement-wherever-data-is-stored-with-aws-datasync/)
+- [AWS blog: Migrate from Azure Blob to S3 using agentless DataSync](https://aws.amazon.com/blogs/migration-and-modernization/how-to-migrate-from-azure-blob-storage-to-amazon-s3-using-agentless-aws-datasync/)
+- [AWS DataSync: CreateLocationAzureBlob API](https://docs.aws.amazon.com/datasync/latest/userguide/API_CreateLocationAzureBlob.html)
+- [AWS Storage blog: Migrating Azure Blob Storage to S3 using DataSync](https://aws.amazon.com/blogs/storage/migrating-azure-blob-storage-to-amazon-s3-using-aws-datasync)
+- [Microsoft: Security recommendations for Blob Storage (firewall)](https://learn.microsoft.com/en-us/azure/storage/blobs/security-recommendations)
 - [AWS DataSync: Deploying your agent](https://docs.aws.amazon.com/datasync/latest/userguide/configure-agent.html)
 - [AWS DataSync FAQs](https://aws.amazon.com/datasync/faqs/)
 - [AWS DataSync pricing](https://aws.amazon.com/datasync/pricing/)
