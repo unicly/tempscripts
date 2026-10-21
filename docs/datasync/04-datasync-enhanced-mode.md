@@ -43,9 +43,44 @@ and options are supported.
 |---|---|
 | Agentless | Older AWS docs: Azure Blob ↔ S3 in Enhanced mode **without an agent**. The DataSync service reaches the storage account's **public endpoint** (not usable if public access is disabled) |
 | With an agent (July 2026) | Enhanced mode **agents** now support Azure Blob (to and from), plus HDFS and self-managed object storage. Agents can run on **Hyper-V**, so they can be deployed in Azure via the Hyper-V image. Available in all regions where DataSync is offered |
-| Private network | DataSync supports **VPC endpoints**. With a VPC endpoint, **all agents of a location must use the same endpoint and subnet**. ⚠️ Not explicitly confirmed for Enhanced mode Azure Blob agents yet |
+| Private network | Only **with an agent** and a **DataSync VPC endpoint**. See [Private mode](#private-mode-no-public-internet) below |
 | Hyper-V setup | ⚠️ Enhanced mode Hyper-V deployment steps not found yet. Basic mode uses a `.vhdx` image, converted to VHD for Azure |
 | Agent availability | All agents of a location must be **online** before a task starts. Several agents don't give high availability |
+
+## Private mode (no public internet)
+
+**Yes, but only with an agent.** For a private AWS ⇄ Azure path in Enhanced mode, run an **Enhanced mode
+agent in Azure** and connect it to AWS through a **DataSync VPC endpoint**. Don't use the agentless option.
+
+| Setup | Public internet? | Usable without public traffic? |
+|---|---|---|
+| Enhanced mode, **no agent** (Azure Blob ↔ S3) | **Yes.** The DataSync service reaches the storage account's **public endpoint** (doesn't work if public access is disabled) | ❌ |
+| Enhanced mode, **agent in Azure** + **DataSync VPC endpoint** + **VPN or ExpressRoute ↔ Direct Connect** | **No** | ✅ |
+| Basic mode, agent + VPC endpoint (current design in docs 01–03) | No | ✅ (fallback) |
+
+**What makes it fully private:**
+
+1. **Agent ↔ Azure Blob:** the agent VM runs in your Azure VNet and reaches the storage account through an
+   **Azure Private Endpoint**, with private DNS for `*.blob.core.windows.net`. Public network access on the
+   storage account can then be **disabled**.
+2. **Agent ↔ AWS:** create an **interface VPC endpoint for DataSync** (PrivateLink) and pick it when you
+   **activate** the agent. The agent talks to that endpoint's private IP over **site-to-site VPN or
+   ExpressRoute + Direct Connect**. AWS: an agent that uses a VPC endpoint isn't reachable over the public
+   internet. Activation can be done privately too.
+3. **AWS ↔ S3:** DataSync writes to S3 inside the AWS network. Add an **S3 gateway endpoint** if you also
+   want your own S3 traffic to stay inside the VPC.
+
+**How sure this is:**
+
+- ✅ AWS says VPC endpoints work for **Enhanced mode and Basic mode agent-based tasks** (shared VPC
+  announcement, Sep 2026). Since that launch, one endpoint can serve **several subnets**.
+- ✅ Enhanced mode agents support Azure Blob as a location and, since July 2026, run on **Hyper-V**, which is
+  how you deploy them in Azure.
+- ⚠️ No AWS page found that explicitly documents the full **Azure Blob + Enhanced mode agent + VPC
+  endpoint** combination, and it hasn't been tested. Test it: activate the agent through the VPC endpoint,
+  set the storage account to **deny public access**, then run a small task.
+- ⚠️ The agent VM still needs **outbound** access for activation and updates. Limit it to the VPC endpoint IPs
+  and the ports listed on the AWS *network requirements* page.
 
 ## What it means for a scalable data lake setup
 
@@ -53,7 +88,7 @@ and options are supported.
 |---|---|
 | Many files per dataset | No long scan phase, no per-task file limit, so fewer, larger tasks are possible |
 | Parallel jobs | Each execution is internally parallel. ⚠️ Whether an Enhanced mode agent can run **several tasks at the same time** isn't confirmed. Plan as in doc 03 (one task per agent at a time) until verified |
-| Private AWS ⇄ Azure path | Use **Enhanced mode agents** in Azure with a VPC endpoint (July 2026). Check that your region and options support it |
+| Private AWS ⇄ Azure path | **Enhanced mode agents** in Azure + DataSync VPC endpoint + VPN/ExpressRoute ↔ Direct Connect. **Never agentless** (public endpoint) |
 | Throttling during business hours | ⚠️ May not be available. Use network-level limits or schedules instead |
 | Cost | Per-execution fee: many small, frequent executions cost more. Prefer fewer, larger executions |
 | Delta / Iceberg ordering | Unchanged: copy data before `_delta_log`. Use manifests or filters for Iceberg file lists |
@@ -91,6 +126,15 @@ aws datasync create-task \
 - [AWS DataSync: How DataSync works](https://docs.aws.amazon.com/datasync/latest/userguide/how-datasync-transfer-works.html)
 - [AWS What's New (July 2026): Enhanced mode adds HDFS, Azure Blob and object storage locations with Hyper-V agent support](https://aws.amazon.com/about-aws/whats-new/2026/07/aws-datasync-hdfs-azure-blob-hyper-v/)
 - [Amazon (China): Enhanced mode adds agent-based support for HDFS, Azure Blob and self-managed object storage](https://www.amazonaws.cn/en/new/2026/datasync-enhanced-mode-adds-agent-based-support/)
+- [AWS What's New (Sep 2026): DataSync now supports shared VPCs (Enhanced and Basic mode agent tasks)](https://aws.amazon.com/about-aws/whats-new/2026/09/aws-datasync-shared-vpcs/)
+- [AWS DataSync: Using agents with VPC endpoints](https://docs.aws.amazon.com/datasync/latest/userguide/datasync-in-vpc.html)
+- [AWS DataSync: Choosing a service endpoint for your agent](https://docs.aws.amazon.com/datasync/latest/userguide/choose-service-endpoint.html)
+- [AWS DataSync API: PrivateLinkConfig](https://docs.aws.amazon.com/datasync/latest/userguide/API_PrivateLinkConfig.html)
+- [AWS DataSync: Configuring transfers with Azure Blob Storage](https://docs.aws.amazon.com/datasync/latest/userguide/creating-azure-blob-location.html)
+- [AWS re:Post: Use a VPC endpoint to activate a DataSync agent](https://repost.aws/knowledge-center/datasync-cross-activate-agent)
+- [aws-samples: deploy a DataSync agent on Azure](https://github.com/aws-samples/aws-datasync-deploy-agent-azure)
+- [Medium: syncing Azure Blob to S3 privately with DataSync (third party)](https://medium.com/allocore/syncing-data-privately-from-azure-blob-storage-to-amazon-s3-using-aws-datasync-138d46535273)
+- [AWS blog: Simplify multicloud data movement with DataSync](https://aws.amazon.com/blogs/storage/simplify-multicloud-data-movement-wherever-data-is-stored-with-aws-datasync/)
 - [AWS DataSync: Deploying your agent](https://docs.aws.amazon.com/datasync/latest/userguide/configure-agent.html)
 - [AWS DataSync FAQs](https://aws.amazon.com/datasync/faqs/)
 - [AWS DataSync pricing](https://aws.amazon.com/datasync/pricing/)
