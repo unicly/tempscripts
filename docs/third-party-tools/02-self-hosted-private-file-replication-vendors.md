@@ -8,7 +8,7 @@ Research on 6 products for **file replication between S3 and Azure Blob / ADLS**
 
 Vendors: CData **Arc**, Signiant, Flexify, Resilio, Coviant Software, NetApp.
 
-> From vendor docs, vendor marketing and third-party articles (October 2026). Not tested. ⚠️ marks points that
+> From vendor docs, vendor marketing and third-party articles (October 2026). Not tested. Many points
 > weren't confirmed or come only from vendor marketing. Confirm with each vendor before deciding (see the
 > question list at the end).
 
@@ -16,12 +16,12 @@ Vendors: CData **Arc**, Signiant, Flexify, Resilio, Coviant Software, NetApp.
 
 | Vendor / product | Self-hosted | Private data path | S3 ⇄ Azure, both directions | Copies files as-is | Control plane needs internet? | Fit |
 |---|---|---|---|---|---|---|
-| **NetApp Copy and Sync** | ✅ Data brokers (VMs) in AWS, Azure or on-premises | ✅ S3 private link, Azure VNet service endpoints. Azure **Private Endpoint** ⚠️ | ✅ S3 → Blob and Blob → S3 | ✅ | ⚠️ **Yes**: brokers poll the NetApp SaaS over outbound 443 (SQS) | ⭐ **Good** |
-| **Resilio Active Everywhere** | ✅ Management Console + agents, all yours | ✅ Agent-to-agent in your network. Storage via private endpoints ⚠️ | ✅ S3 and Azure Blob via agents | ✅ | ⚠️ License checks (offline/air-gapped licence not confirmed) | ⭐ **Good** |
-| **Flexify.IO** (Standard Edition) | ✅ Management server + engines in your Azure subscription, or elsewhere | ✅ Engines in your VPC / VNet ⚠️ | ✅ Migration and cross-cloud replication | ✅ (object copy) | ⚠️ Not documented | ✅ Possible |
-| **Coviant Diplomat MFT** | ✅ Windows / Linux servers | ✅ Runs in your network | ✅ S3 and Azure Blob connectors | ✅ | No (self-contained) | ⚠️ For scheduled transfer jobs, not data-lake scale |
-| **Signiant Jet / SDCX Server** | Partly: SDCX servers yours, platform is SaaS | ⚠️ Private-network SDCX deployment from v7.3.1 (June 2026). **Cloud-to-cloud transfers coordinated by Signiant-hosted servers** | ⚠️ S3 and Blob, but **ADLS (hierarchical namespace) not supported** | ✅ | **Yes** (SaaS control) | ❌ Weak |
-| **CData Arc** | ✅ On-premises or private cloud (Windows / Java). Connectors can also run in **Docker** | ✅ Runs in your network ⚠️ (private endpoints to check) | ✅ **S3 connector** + **Azure Blob connector** in one flow, both directions | ✅ (files staged on the Arc server) | No | ⚠️ Like Coviant: job-based file flows, not data-lake scale |
+| **NetApp Copy and Sync** | ✅ Data brokers (VMs) in AWS, Azure or on-premises | ✅ S3 private link, Azure VNet service endpoints. Azure **Private Endpoint** not confirmed | ✅ S3 → Blob and Blob → S3 | ✅ | **Yes**: brokers poll the NetApp SaaS over outbound 443 (SQS) | ⭐ **Good** |
+| **Resilio Active Everywhere** | ✅ Management Console + agents, all yours | ✅ Agent-to-agent in your network. Storage via private endpoints (to test) | ✅ S3 and Azure Blob via agents | ✅ | License checks (offline/air-gapped licence not confirmed) | ⭐ **Good** |
+| **Flexify.IO** (Standard Edition) | ✅ Management server + engines in your Azure subscription, or elsewhere | ✅ Engines in your VPC / VNet (private endpoint setup not documented) | ✅ Migration and cross-cloud replication | ✅ (object copy) | Not documented | ✅ Possible |
+| **Coviant Diplomat MFT** | ✅ Windows / Linux servers | ✅ Runs in your network | ✅ S3 and Azure Blob connectors | ✅ | No (self-contained) | For scheduled transfer jobs, not data-lake scale |
+| **Signiant Jet / SDCX Server** | Partly: SDCX servers yours, platform is SaaS | Private-network SDCX deployment from v7.3.1 (June 2026). **Cloud-to-cloud transfers coordinated by Signiant-hosted servers** | S3 and Blob, but **ADLS (hierarchical namespace) not supported** | ✅ | **Yes** (SaaS control) | ❌ Weak |
+| **CData Arc** | ✅ On-premises or private cloud (Windows / Java). Connectors can also run in **Docker** | ✅ Runs in your network (private endpoints to check) | ✅ **S3 connector** + **Azure Blob connector** in one flow, both directions | ✅ (files staged on the Arc server) | No | Like Coviant: job-based file flows, not data-lake scale |
 
 **Shortlist:** **NetApp Copy and Sync** and **Resilio Active Everywhere**, then **Flexify.IO**. **Coviant
 Diplomat MFT** or **CData Arc** if your volumes are moderate and job-based. Signiant
@@ -36,10 +36,10 @@ doesn't fit file replication between S3 and Azure in a private network.
 | What it is | Sync service: you create **sync relationships** (source → target) run by **data brokers** |
 | Deployment | Data broker = VM you deploy in **AWS, Azure, GCP or on-premises**. Grouped in **data broker groups** for scale and availability |
 | S3 ⇄ Azure | ✅ Both directions are in the supported relationships matrix. Broker for S3 must run **in AWS or on-premises**. Broker for Azure Blob can run **anywhere** |
-| Private data path | ✅ **S3 private link** option (broker copies through the endpoint, needs `ec2:DescribeVpcEndpoints`). FAQ lists **Amazon private S3 endpoints** and **Azure VNet service endpoints**. ⚠️ **Azure Private Endpoint** not named in the docs found |
+| Private data path | ✅ **S3 private link** option (broker copies through the endpoint, needs `ec2:DescribeVpcEndpoints`). FAQ lists **Amazon private S3 endpoints** and **Azure VNet service endpoints**. **Azure Private Endpoint** not named in the docs found |
 | Network between clouds | Source and target must be reachable from the broker: **VPN / Direct Connect / ExpressRoute** |
-| Control plane | ⚠️ Brokers need **outbound internet on 443** to poll the Copy and Sync service (via **Amazon SQS**). Data doesn't go through NetApp, but the control traffic does |
-| ADLS Gen2 | ⚠️ Not confirmed (Blob is documented) |
+| Control plane | Brokers need **outbound internet on 443** to poll the Copy and Sync service (via **Amazon SQS**). Data doesn't go through NetApp, but the control traffic does |
+| ADLS Gen2 | Not confirmed (Blob is documented) |
 | Region limits | No China regions. Azure Blob: no US Gov / US DoD |
 | Verdict | Closest to DataSync. Data path can be private. Control plane is SaaS |
 
@@ -50,9 +50,9 @@ doesn't fit file replication between S3 and Azure in a private network.
 | What it is | Peer-to-peer sync and replication: **Management Console** + **agents** |
 | Deployment | Fully **self-hosted**: console and agents on your servers. Optional self-hosted tracker server |
 | S3 ⇄ Azure | ✅ Agents read and write **Amazon S3, Azure Blob**, GCS, Wasabi and others (cloud agents have documented characteristics and limitations) |
-| Private network | ✅ Agents talk to each other over your network (ports: console 8443, agent control 8444, tracker 3000, data 3839, all configurable). Put agents in your VPC and VNet and reach storage through private endpoints ⚠️ |
-| Control plane | Self-hosted. ⚠️ The console **checks for licence updates** (every 10 min when agents are unlicensed). Offline / air-gapped licensing not confirmed |
-| Sync modes | One-way, two-way, continuous or scheduled ⚠️ (check modes for cloud storage agents) |
+| Private network | ✅ Agents talk to each other over your network (ports: console 8443, agent control 8444, tracker 3000, data 3839, all configurable). Put agents in your VPC and VNet and reach storage through private endpoints (to test) |
+| Control plane | Self-hosted. The console **checks for licence updates** (every 10 min when agents are unlicensed). Offline / air-gapped licensing not confirmed |
+| Sync modes | One-way, two-way, continuous or scheduled (check modes for cloud storage agents) |
 | Scale | Vendor claims up to **50,000 agents** per console |
 | Verdict | Best fit for a **fully self-hosted** control plane. Check cloud-agent limitations and licensing |
 
@@ -63,9 +63,9 @@ doesn't fit file replication between S3 and Azure in a private network.
 | What it is | Multi-cloud **S3-compatible virtual endpoint** plus **migration** and **replication** across clouds |
 | Deployment | **Standard Edition** self-hosted as Azure-native resources in **your subscription** (ARM templates), or hosted outside Azure. **Community Edition** as a single Docker container. Flexify doesn't store data or metadata |
 | S3 ⇄ Azure | ✅ Azure Blob ↔ S3, migration (copy or move) and replication |
-| Private network | ✅ Engines run in your network. ⚠️ Private endpoint / VNet setup not documented in the sources found |
+| Private network | ✅ Engines run in your network. Private endpoint / VNet setup not documented in the sources found |
 | Sizing | **One engine per Gbps** of peak throughput, at least two engines in different availability zones |
-| Pricing | ⚠️ 2020 figures: $2,500/year management server + $1,000/year per engine (Azure Standard Edition). Check current pricing |
+| Pricing | 2020 figures: $2,500/year management server + $1,000/year per engine (Azure Standard Edition). Check current pricing |
 | Verdict | Possible. Strong for migrations. Check replication mode details and private setup |
 
 ### Coviant Software Diplomat MFT
@@ -76,8 +76,8 @@ doesn't fit file replication between S3 and Azure in a private network.
 | Deployment | ✅ **Self-hosted** on Windows or Linux, on-premises, in the cloud or hybrid |
 | S3 ⇄ Azure | ✅ Connectors for **Amazon S3** (and S3-compatible) and **Azure Blob**. Number of connectors depends on the tier (Professional: 1, Enterprise: 5) |
 | Private network | ✅ Fully in your network |
-| Pricing | ⚠️ Vendor: Standard $3,999/year, Professional $8,499/year |
-| Fit | ⚠️ Built for business file transfers (partners, SFTP, PGP, audit), not for syncing **millions of files** in a data lake |
+| Pricing | Vendor: Standard $3,999/year, Professional $8,499/year |
+| Fit | Built for business file transfers (partners, SFTP, PGP, audit), not for syncing **millions of files** in a data lake |
 | Verdict | Good if volumes are moderate and job-based. Not a data-lake sync engine |
 
 ### Signiant (Jet, SDCX Server)
@@ -86,7 +86,7 @@ doesn't fit file replication between S3 and Azure in a private network.
 |---|---|
 | What it is | Accelerated file transfer platform (media focus). SaaS platform + **SDCX Server** software on your servers |
 | Deployment | SDCX servers on-premises or in your cloud. Platform is **SaaS** |
-| Private network | ⚠️ SDCX 7.3.1 (June 2026) supports deployment in a **private network without direct internet access**. Before that, servers need access to Signiant and Amazon domains |
+| Private network | SDCX 7.3.1 (June 2026) supports deployment in a **private network without direct internet access**. Before that, servers need access to Signiant and Amazon domains |
 | Cloud storage | S3 (role ARN or keys), Azure Blob (**access key**). **Hierarchical namespace (ADLS Gen2) must be off**: Data Lake storage isn't supported |
 | Cloud-to-cloud | Transfers to and from cloud storage are coordinated by **cloud SDCX servers hosted by Signiant** |
 | Verdict | ❌ Weak fit: SaaS coordination, no ADLS, key-based Azure auth |
@@ -100,8 +100,8 @@ doesn't fit file replication between S3 and Azure in a private network.
 | S3 connector | One connector per **bucket**. **Upload**: files arriving in the connector's Input folder are uploaded to the bucket / remote path. **Download**: polls the bucket at a set **interval** and passes new files on. Works with S3 and S3-compatible storage |
 | Azure Blob connector | One connector per **storage account**. Send (upload) and receive (download), **overwrite** option, **file name / extension filters**, optional **delete after download** |
 | S3 → Azure flow | `S3 connector (download)` → `Azure Blob connector (upload)`. Azure → S3 is the reverse flow. Files pass through the **Arc server's disk** |
-| Private network | ✅ Arc runs in your network. ⚠️ Check that the S3 connector can use an **S3 interface/VPC endpoint URL** and that Azure Blob works through a **Private Endpoint** (private DNS). ⚠️ Auth options (IAM role vs. keys, managed identity vs. key/SAS) to check |
-| Fit | ⚠️ Polling + staging on the server: fine for **moderate volumes** and business file flows. Not built to sync **millions of files** or mirror deletes in a data lake. Don't enable "delete after download" on the source unless you want a move |
+| Private network | ✅ Arc runs in your network. Check that the S3 connector can use an **S3 interface/VPC endpoint URL** and that Azure Blob works through a **Private Endpoint** (private DNS). Auth options (IAM role vs. keys, managed identity vs. key/SAS) to check |
+| Fit | Polling + staging on the server: fine for **moderate volumes** and business file flows. Not built to sync **millions of files** or mirror deletes in a data lake. Don't enable "delete after download" on the source unless you want a move |
 | Verdict | ✅ Possible for job-based file flows, same category as Coviant Diplomat MFT |
 
 ## Recommended next steps
