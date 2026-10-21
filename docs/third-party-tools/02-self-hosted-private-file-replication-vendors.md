@@ -1,12 +1,12 @@
 # Self-hosted file replication between AWS and Azure in a private network: vendor research
 
-Research on 7 vendors for **file replication between S3 and Azure Blob / ADLS**, with two hard requirements:
+Research on 6 vendors for **file replication between S3 and Azure Blob / ADLS**, with two hard requirements:
 
 1. **Self-hosted:** runs on **your own infrastructure** (VMs or containers in your VPC / VNet / data center).
 2. **Private network:** data does **not** go over the public internet (VPN or ExpressRoute ⇄ Direct Connect,
    S3 interface/gateway endpoints, Azure Private Endpoints).
 
-Vendors: CData (Sync and **Arc**), Signiant, Flexify, Resilio, Peer Software, Coviant Software, NetApp.
+Vendors: CData (Sync and **Arc**), Signiant, Flexify, Resilio, Coviant Software, NetApp.
 
 > From vendor docs, vendor marketing and third-party articles (October 2026). Not tested. ⚠️ marks points that
 > weren't confirmed or come only from vendor marketing. Confirm with each vendor before deciding (see the
@@ -23,11 +23,10 @@ Vendors: CData (Sync and **Arc**), Signiant, Flexify, Resilio, Peer Software, Co
 | **Signiant Jet / SDCX Server** | Partly: SDCX servers yours, platform is SaaS | ⚠️ Private-network SDCX deployment from v7.3.1 (June 2026). **Cloud-to-cloud transfers coordinated by Signiant-hosted servers** | ⚠️ S3 and Blob, but **ADLS (hierarchical namespace) not supported** | ✅ | **Yes** (SaaS control) | ❌ Weak |
 | **CData Arc** | ✅ On-premises or private cloud (Windows / Java). Connectors can also run in **Docker** | ✅ Runs in your network ⚠️ (private endpoints to check) | ✅ **S3 connector** + **Azure Blob connector** in one flow, both directions | ✅ (files staged on the Arc server) | No | ⚠️ Like Coviant: job-based file flows, not data-lake scale |
 | **CData Sync** | ✅ Windows / Linux (Java), or marketplace VMs | ✅ Runs in your network | ⚠️ S3 ↔ Azure (Blob/ADLS) as **data** sources/destinations | ❌ Replicates **data** (CSV, Parquet, Avro output), not the original files | No | ❌ Not for file replication |
-| **Peer Software PeerGFS** ("native cloud backup & replication") | ✅ | ✅ | ❌ Replicates **from file servers** (NAS, Windows) **to** S3 / Blob. No object-to-object, no cloud-to-cloud | ✅ (one file = one object, native format) | No | ❌ Doesn't fit |
 
 **Shortlist:** **NetApp Copy and Sync** and **Resilio Active Everywhere**, then **Flexify.IO**. **Coviant
-Diplomat MFT** or **CData Arc** if your volumes are moderate and job-based. Signiant, CData Sync and Peer
-Software don't fit file replication between S3 and Azure in a private network.
+Diplomat MFT** or **CData Arc** if your volumes are moderate and job-based. Signiant and CData Sync
+don't fit file replication between S3 and Azure in a private network.
 
 ## Details per vendor
 
@@ -115,16 +114,6 @@ Software don't fit file replication between S3 and Azure in a private network.
 | S3 ⇄ Azure | Azure Blob / ADLS destinations (CSV, Parquet, Avro; auth: Entra ID, service principal, managed identity, key, SAS). S3 as a destination |
 | Fit | ❌ Replicates **data into files it generates**, not the original files byte for byte |
 | Verdict | ❌ Not for file replication. Use **CData Arc** for files |
-
-### Peer Software (PeerGFS, "native cloud backup & replication")
-
-| Topic | Finding |
-|---|---|
-| What it is | Real-time replication and file locking for **file servers**: Windows, NetApp ONTAP / Cloud Volumes ONTAP, FSx for NetApp ONTAP, Dell PowerScale/PowerStore/Unity, Nutanix Files |
-| Native cloud replication | **Cloud Backup / Replication** job: real-time or scheduled replication of file changes **from NAS / Windows file servers into Azure Blob and Amazon S3** (also StorageGRID, Nutanix Objects). Each file = **one object in native format** (readable by cloud analytics), optional **version tracking**, point-in-time restore |
-| Direction | **File server → object storage** only. Vendor (2022): customers replicate **to** S3 / Blob, not **from** them. No documented **S3 → Azure Blob** or **Azure Blob → S3** (object-to-object, cloud-to-cloud) replication |
-| Deployment | ✅ Self-hosted (management server + agents next to the file servers) |
-| Fits your use case? | ❌ **No.** Your source and target are both **object storage** (S3 and Azure Blob / ADLS). PeerGFS needs a **file server** as source. It would only fit if the source data lived on NAS / Windows file servers (or FSx for NetApp ONTAP / Cloud Volumes ONTAP) and you replicated it to both clouds |
 
 ## Recommended next steps
 
@@ -214,11 +203,3 @@ Software don't fit file replication between S3 and Azure in a private network.
 - [CData Sync: Installation and configuration](https://cdn.cdata.com/help/ASH/sync/Installation-Configuration.html)
 - [CData KB: S3 to Azure Data Lake](https://www.cdata.com/kb/tech/s3-sync-azuredatalake.rst)
 - [CData KB: Azure Blob to S3](https://www.cdata.com/kb/tech/azureblobstorage-sync-s3.rst)
-
-**Peer Software**
-- [PeerGFS](https://www.peersoftware.com/products/peergfs/)
-- [Peer Software: native edge, hybrid and cloud data replication & backup](https://www.peersoftware.com/solutions/native-cloud-backup-replication/)
-- [PeerGFS v4.5 release](https://www.peersoftware.com/peergfs-v4-5-is-now-available/)
-- [Resilio: PeerGFS alternative (competitor view)](https://www.resilio.com/blog/peergfs-alternative)
-- [PeerGFS data sheet](https://www.peersoftware.com/wp-content/uploads/resources/data-sheets/ds_peergfs_en_a4.pdf)
-- [Blocks & Files (2022)](https://blocksandfiles.com/2022/04/29/peer-software-replication-spawning-more-features/)
