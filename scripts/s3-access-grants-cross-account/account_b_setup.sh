@@ -9,6 +9,7 @@
 set -euo pipefail
 
 # ---- Edit these -------------------------------------------------------------------
+PROFILE="account-b"                # AWS CLI profile for account B
 REGION="eu-west-1"                       # must be the region of the Access Grants instance in account A
 ACCOUNT_A_ID="111111111111"              # owner of S3 Access Grants and the bucket
 ROLE_NAME="s3-access-grants-lambda-role"
@@ -21,6 +22,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 export AWS_REGION="$REGION" AWS_DEFAULT_REGION="$REGION"
 INSTANCE_ARN="arn:aws:s3:${REGION}:${ACCOUNT_A_ID}:access-grants/default"
+
+# Make sure the profile is NOT for account A (the Lambda and the role belong in account B)
+PROFILE_ACCOUNT="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)"
+[[ "$PROFILE_ACCOUNT" != "$ACCOUNT_A_ID" ]] \
+  || { echo "Profile '$PROFILE' is for account A ($ACCOUNT_A_ID). Use the profile for account B."; exit 1; }
+echo "Using profile '$PROFILE' (account $PROFILE_ACCOUNT)"
 
 create_role() {
   echo "==> IAM role $ROLE_NAME"
@@ -47,39 +54,39 @@ JSON
   ]
 }
 JSON
-  if aws iam get-role --role-name "$ROLE_NAME" >/dev/null 2>&1; then
+  if aws iam get-role --profile "$PROFILE" --role-name "$ROLE_NAME" >/dev/null 2>&1; then
     echo "Role exists: updating its trust policy."
-    aws iam update-assume-role-policy --role-name "$ROLE_NAME" --policy-document "file://$WORKDIR/trust.json"
+    aws iam update-assume-role-policy --profile "$PROFILE" --role-name "$ROLE_NAME" --policy-document "file://$WORKDIR/trust.json"
   else
-    aws iam create-role --role-name "$ROLE_NAME" \
+    aws iam create-role --profile "$PROFILE" --role-name "$ROLE_NAME" \
       --assume-role-policy-document "file://$WORKDIR/trust.json" \
       --description "Lambda role granted through S3 Access Grants in account ${ACCOUNT_A_ID}" >/dev/null
   fi
-  aws iam attach-role-policy --role-name "$ROLE_NAME" \
+  aws iam attach-role-policy --profile "$PROFILE" --role-name "$ROLE_NAME" \
     --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-  aws iam put-role-policy --role-name "$ROLE_NAME" --policy-name s3-access-grants \
+  aws iam put-role-policy --profile "$PROFILE" --role-name "$ROLE_NAME" --policy-name s3-access-grants \
     --policy-document "file://$WORKDIR/access-grants-policy.json"
-  aws iam wait role-exists --role-name "$ROLE_NAME"
-  echo "Role ARN (use it in account_a_grant.sh): $(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)"
+  aws iam wait role-exists --profile "$PROFILE" --role-name "$ROLE_NAME"
+  echo "Role ARN (use it in account_a_grant.sh): $(aws iam get-role --profile "$PROFILE" --role-name "$ROLE_NAME" --query Role.Arn --output text)"
 }
 
 create_lambda() {
   echo "==> Lambda $FUNCTION_NAME"
-  ROLE_ARN="$(aws iam get-role --role-name "$ROLE_NAME" --query Role.Arn --output text)"
+  ROLE_ARN="$(aws iam get-role --profile "$PROFILE" --role-name "$ROLE_NAME" --query Role.Arn --output text)"
   (cd "$SCRIPT_DIR/lambda" && zip -q "$WORKDIR/function.zip" lambda_function.py)
   ENV_VARS="Variables={ACCESS_GRANTS_ACCOUNT_ID=${ACCOUNT_A_ID},BUCKET=${BUCKET},PREFIX=${PREFIX}}"
 
-  if aws lambda get-function --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
+  if aws lambda get-function --profile "$PROFILE" --function-name "$FUNCTION_NAME" >/dev/null 2>&1; then
     echo "Function exists: updating code and configuration."
-    aws lambda update-function-code --function-name "$FUNCTION_NAME" \
+    aws lambda update-function-code --profile "$PROFILE" --function-name "$FUNCTION_NAME" \
       --zip-file "fileb://$WORKDIR/function.zip" >/dev/null
-    aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
-    aws lambda update-function-configuration --function-name "$FUNCTION_NAME" \
+    aws lambda wait function-updated-v2 --profile "$PROFILE" --function-name "$FUNCTION_NAME"
+    aws lambda update-function-configuration --profile "$PROFILE" --function-name "$FUNCTION_NAME" \
       --role "$ROLE_ARN" --environment "$ENV_VARS" >/dev/null
   else
     # A new role can take a few seconds before Lambda can assume it: retry.
     for attempt in 1 2 3 4 5 6; do
-      if aws lambda create-function --function-name "$FUNCTION_NAME" \
+      if aws lambda create-function --profile "$PROFILE" --function-name "$FUNCTION_NAME" \
           --runtime python3.13 --architectures arm64 \
           --handler lambda_function.lambda_handler \
           --role "$ROLE_ARN" \
@@ -93,14 +100,14 @@ create_lambda() {
       echo "Role not ready yet (attempt $attempt), retrying in 10 s..."; sleep 10
     done
   fi
-  aws lambda wait function-active-v2 --function-name "$FUNCTION_NAME"
-  aws lambda wait function-updated-v2 --function-name "$FUNCTION_NAME"
-  echo "Function ready: $(aws lambda get-function --function-name "$FUNCTION_NAME" --query Configuration.FunctionArn --output text)"
+  aws lambda wait function-active-v2 --profile "$PROFILE" --function-name "$FUNCTION_NAME"
+  aws lambda wait function-updated-v2 --profile "$PROFILE" --function-name "$FUNCTION_NAME"
+  echo "Function ready: $(aws lambda get-function --profile "$PROFILE" --function-name "$FUNCTION_NAME" --query Configuration.FunctionArn --output text)"
 }
 
 invoke_lambda() {
   echo "==> Invoke $FUNCTION_NAME"
-  aws lambda invoke --function-name "$FUNCTION_NAME" \
+  aws lambda invoke --profile "$PROFILE" --function-name "$FUNCTION_NAME" \
     --cli-binary-format raw-in-base64-out --payload '{}' \
     --log-type Tail --query LogResult --output text "$WORKDIR/response.json" | base64 -d
   echo "--- Response:"

@@ -28,7 +28,9 @@ Grants returns, which act as the **location's IAM role in account A**. So no buc
 
 ## Steps
 
-Edit the variables at the top of both scripts (region, account IDs, bucket, prefix). Then:
+Edit the variables at the top of both scripts: `PROFILE` (the AWS CLI profile for that account: every
+`aws` command runs with `--profile`), region, account IDs, bucket, prefix. Each script checks that its profile
+points to the right account. Then:
 
 ```bash
 # 1. Account B: create the role

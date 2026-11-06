@@ -11,6 +11,7 @@
 set -euo pipefail
 
 # ---- Edit these -------------------------------------------------------------------
+PROFILE="account-a"                # AWS CLI profile for account A
 REGION="eu-west-1"                       # region of the Access Grants instance (and bucket)
 ACCOUNT_A_ID="111111111111"              # this account
 ACCOUNT_B_ID="222222222222"              # account with the Lambda
@@ -23,19 +24,24 @@ ROLE_ARN="arn:aws:iam::${ACCOUNT_B_ID}:role/${ROLE_NAME}"
 INSTANCE_ARN="arn:aws:s3:${REGION}:${ACCOUNT_A_ID}:access-grants/default"
 WORKDIR="$(mktemp -d)"; trap 'rm -rf "$WORKDIR"' EXIT
 
+# Make sure the profile is for account A
+PROFILE_ACCOUNT="$(aws sts get-caller-identity --profile "$PROFILE" --query Account --output text)"
+[[ "$PROFILE_ACCOUNT" == "$ACCOUNT_A_ID" ]] \
+  || { echo "Profile '$PROFILE' is for account $PROFILE_ACCOUNT, not account A ($ACCOUNT_A_ID)."; exit 1; }
+
 # Find the registered location that covers the bucket. "s3://" is the default location
 # (whole account); a location such as s3://my-bucket/ also works.
 echo "Registered locations:"
-aws s3control list-access-grants-locations --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+aws s3control list-access-grants-locations --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --query 'AccessGrantsLocationsList[].[AccessGrantsLocationId,LocationScope]' --output table
 
-LOCATION_ID="$(aws s3control list-access-grants-locations --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+LOCATION_ID="$(aws s3control list-access-grants-locations --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --query "AccessGrantsLocationsList[?LocationScope=='s3://${BUCKET}/' || LocationScope=='s3://${BUCKET}' || LocationScope=='s3://'] | [0].AccessGrantsLocationId" \
   --output text)"
 [[ -n "$LOCATION_ID" && "$LOCATION_ID" != "None" ]] || { echo "No location covers s3://${BUCKET}. Register one first."; exit 1; }
 
 # With the default location "s3://", the sub-prefix includes the bucket name.
-LOCATION_SCOPE="$(aws s3control get-access-grants-location --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+LOCATION_SCOPE="$(aws s3control get-access-grants-location --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --access-grants-location-id "$LOCATION_ID" --query LocationScope --output text)"
 if [[ "$LOCATION_SCOPE" == "s3://" ]]; then SUB_PREFIX="${BUCKET}/${PREFIX}*"; else SUB_PREFIX="${PREFIX}*"; fi
 echo "Using location $LOCATION_ID ($LOCATION_SCOPE), sub-prefix $SUB_PREFIX"
@@ -43,7 +49,7 @@ echo "Using location $LOCATION_ID ($LOCATION_SCOPE), sub-prefix $SUB_PREFIX"
 # ---- 1. Resource policy on the Access Grants instance ------------------------------
 # WARNING: this REPLACES the instance's current resource policy. If one exists, merge it.
 echo "Current resource policy (if any):"
-aws s3control get-access-grants-instance-resource-policy --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+aws s3control get-access-grants-instance-resource-policy --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --query Policy --output text 2>/dev/null || echo "(none)"
 
 cat > "$WORKDIR/instance-policy.json" <<JSON
@@ -64,11 +70,11 @@ cat > "$WORKDIR/instance-policy.json" <<JSON
   ]
 }
 JSON
-aws s3control put-access-grants-instance-resource-policy --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+aws s3control put-access-grants-instance-resource-policy --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --policy "file://$WORKDIR/instance-policy.json"
 
 # ---- 2. Grant for the account B role --------------------------------------------------
-aws s3control create-access-grant --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+aws s3control create-access-grant --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --access-grants-location-id "$LOCATION_ID" \
   --access-grants-location-configuration "S3SubPrefix=${SUB_PREFIX}" \
   --permission READWRITE \
@@ -76,6 +82,6 @@ aws s3control create-access-grant --account-id "$ACCOUNT_A_ID" --region "$REGION
   --query '[AccessGrantId,GrantScope]' --output text
 
 echo "Done. Grants for ${ROLE_ARN}:"
-aws s3control list-access-grants --account-id "$ACCOUNT_A_ID" --region "$REGION" \
+aws s3control list-access-grants --profile "$PROFILE" --account-id "$ACCOUNT_A_ID" --region "$REGION" \
   --grantee-type IAM --grantee-identifier "$ROLE_ARN" \
   --query 'AccessGrantsList[].[AccessGrantId,Permission,GrantScope]' --output table
