@@ -24,6 +24,7 @@ Grants returns, which act as the **location's IAM role in account A**. So no buc
 | [`account_b_setup.sh`](account_b_setup.sh) | B | `role`: IAM role (Lambda trust, logs, `s3:GetDataAccess` on account A's instance). `lambda`: package and create/update the function. `invoke`: run it and show logs |
 | [`account_a_grant.sh`](account_a_grant.sh) | A | Resource policy on the Access Grants instance for account B, and a READWRITE grant for the role |
 | [`lambda/lambda_function.py`](lambda/lambda_function.py) | B | The function code |
+| [`COMMANDS.md`](COMMANDS.md) | A + B | The same steps as plain AWS CLI commands to copy and paste |
 
 ## Steps
 
