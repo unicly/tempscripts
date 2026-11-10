@@ -2,9 +2,39 @@
 
 This document explains, step by step, how the data lake is set up across two
 AWS accounts and why each piece is there. It contains no CLI commands — those
-are in [`DATALAKE_CLI_SETUP.md`](DATALAKE_CLI_SETUP.md), which follows the same
-steps in the same order. Here you find the reasoning and the **JSON of every
-policy and configuration**.
+are the numbered scripts in this folder, configured by one file, `.env`.
+Here you find the reasoning and the **JSON of every policy and configuration**.
+
+**Running the scripts:** edit `.env` (account IDs, profiles,
+`STORAGE_ADMIN_ARN`, bucket names), then run the scripts in number order with
+**bash** (`bash 01_feeder_iam_lambda_roles.sh`, …). Each script checks what
+already exists and can be re-run. Generated JSON/SQL/zip files go to `build/`.
+
+| Script | Account | Task | Section below |
+|---|---|---|---|
+| `01_feeder_iam_lambda_roles.sh` | Feeder | Lambda exec role + grantee role | 3 |
+| `02_feeder_iam_replication_role.sh` | Feeder | Replication role | 6.3 |
+| `03_storage_s3_datalake.sh` | Storage | Data lake bucket + Access-Grants-only policy (asks before applying) | 2.2 |
+| `04_storage_s3_cloudtrail_logs.sh` | Storage | Storage CloudTrail log bucket + lifecycle + policy | 2.1, 5 |
+| `05_storage_s3_feeder_replica.sh` | Storage | Replica bucket + versioning + lifecycle + policy | 2.1, 2.3 |
+| `06_storage_s3_athena_results.sh` | Storage | Athena results bucket | 9 |
+| `07_storage_access_grants_location_role.sh` | Storage | Location role | 4.1 |
+| `08_storage_access_grants_location_and_grant.sh` | Storage | Location + grant (reuses existing) | 4.2 |
+| `09_ram_share_access_grants.sh` | both | RAM share + accept invitation | 4.3 |
+| `10_storage_cloudtrail.sh` | Storage | Trail + event selectors | 5 |
+| `11_feeder_s3_cloudtrail_logs.sh` | Feeder | Feeder log bucket + versioning + lifecycle + policy | 2.1, 6.2 |
+| `12_feeder_cloudtrail.sh` | Feeder | Trail + event selectors | 6.2 |
+| `13_feeder_s3_replication.sh` | Feeder | Replication rule | 6.4 |
+| `14_feeder_lambda_datalake.sh` | Feeder | Lambda `DataLakePocObjects` (code in `lambda/`) | 7 |
+| `15_storage_grants_inventory_lambda.sh` | Storage | Inventory bucket + role + Lambda | 8 |
+| `16_storage_grants_inventory_eventbridge.sh` | Storage | EventBridge rules | 8 |
+| `17_storage_glue_athena.sh` | Storage | Workgroup, Glue database, tables | 9 |
+| `18_test.sh` | both | Tests | 11 |
+| `99_teardown.sh` | both | Remove everything (asks for confirmation) | 12 |
+
+The script order differs slightly from the sections below: roles that other
+policies name as principals are created first, because IAM checks a principal
+when a policy is saved.
 
 Placeholders used throughout:
 
@@ -654,7 +684,7 @@ Events:
 
 On failure it returns `operation` (`AssumeRole`, `GetDataAccess` or the S3
 call), so you can see which step was denied. The code is in
-`DATALAKE_CLI_SETUP.md`, step 6.
+`lambda/data_lake_poc_objects.py`.
 
 ---
 
