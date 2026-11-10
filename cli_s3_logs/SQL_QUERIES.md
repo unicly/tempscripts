@@ -35,6 +35,60 @@ updated `access_grants` table, is in [DATALAKE_README.md](DATALAKE_README.md), s
 
 ---
 
+## Why a grant lookup is needed (and why Query 2 hardcodes it)
+
+**What Storage's logs contain:** every `GetDataAccess` event in
+`storage_datalake_trail` records **the grant it matched**:
+
+```json
+"additionalEventData": {
+  "accessGrantsInfo": {
+    "matchedAccessGrantArn": "arn:aws:s3:eu-west-1:637423360780:access-grants/default/grant/9d46a38b-7410-4355-8202-7dc3e1fb34af"
+  }
+}
+```
+
+The queries take the grant ID from it:
+
+```sql
+regexp_extract(additionaleventdata, 'grant/([a-f0-9-]+)', 1) AS grant_id
+```
+
+**What they don't contain:** the grantee's **ARN** when the grantee is a role
+in another account. Storage records a Feeder caller of `GetDataAccess` like this:
+
+```json
+"userIdentity": { "type": "AWSAccount", "accountId": "262252232556",
+                  "principalId": "AROAT2D3TP5WNHLG27VGO:DataLakePocObjectsFeederRole" }
+```
+
+That is the account and the **role ID** (`AROA…`), but no role name or ARN,
+and Storage can't resolve the role ID into a name.
+
+**So the queries need a lookup from grant ID to grantee ARN.** The grant ID
+always comes from the logs; only its translation to an ARN needs outside
+information. The grant itself knows its grantee, but that's configuration, not
+a log event. Three ways to provide it:
+
+| Option | Source of the grantee ARN | Pros and cons |
+|---|---|---|
+| **Hardcoded** (Query 2) | `VALUES` rows copied from `list-access-grants` | simple, but goes stale whenever grants change |
+| **Inventory table** (`DATALAKE_README.md` step 10) | `access_grants` table, filled by the inventory Lambda | always current, keeps deleted grants |
+| **Feeder's logs** (Query 1) | Feeder's copy of `GetDataAccess`, matched by `sharedeventid` | needs Feeder's management events in Storage; also gives the session and, via Feeder's `AssumeRole`, who assumed the role |
+
+**For Storage grantees** the ARN *is* in Storage's logs
+(`useridentity.sessioncontext.sessionissuer.arn`), because the caller is in the
+same account. The lookup is only needed for grantees in other accounts — the
+main case for a data lake.
+
+Strictly speaking, the grant ID and the grantee ARN appear together in
+Storage's logs once: in the `CreateAccessGrant` event that created the grant.
+But that event only lives as long as your log retention. A grant created three
+months ago with 30 days of logs can't be resolved that way any more, which is
+why the inventory table keeps its own snapshots.
+
+---
+
 ## Query 1 — join Storage and Feeder logs
 
 Finds the Storage copy of each `GetDataAccess` call and, for Feeder grantees,
