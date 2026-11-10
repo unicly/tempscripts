@@ -222,3 +222,52 @@ ORDER BY s3.eventtime DESC
 A grant missing from the list makes its S3 events disappear from the result
 (inner join). Use `LEFT JOIN grants` and select `g.grant_id` too if you'd
 rather see them with an empty ARN.
+
+---
+
+## Listing the grants
+
+### Athena — from the grants inventory table
+
+Needs the `access_grants` table filled by the inventory Lambda
+(`15_storage_grants_inventory_lambda.sh`, `16_…eventbridge.sh`).
+
+All grants ever seen, with the last snapshot that contained each one. A grant
+deleted since then stays in the list with an older `last_seen`:
+
+```sql
+SELECT grant_id, grantee_type, grantee_identifier, permission, grant_scope, created_at,
+       max(exported_at) AS last_seen
+FROM cloudtrail_logs.access_grants
+GROUP BY 1, 2, 3, 4, 5, 6
+ORDER BY created_at;
+```
+
+Only the grants that exist now (those in the latest snapshot):
+
+```sql
+SELECT grant_id, grantee_type, grantee_identifier, permission, grant_scope, created_at
+FROM cloudtrail_logs.access_grants
+WHERE exported_at = (SELECT max(exported_at) FROM cloudtrail_logs.access_grants)
+ORDER BY created_at;
+```
+
+The table is only as current as the last snapshot: daily, and right after
+every `CreateAccessGrant` / `DeleteAccessGrant`. Invoke `AccessGrantsInventory`
+to refresh it.
+
+### AWS CLI — always current
+
+Run in the account that owns the Access Grants instance:
+
+```
+aws s3control list-access-grants --account-id <STORAGE_ACCOUNT_ID> --region <REGION> --profile <storage> \
+  --query 'AccessGrantsList[].[AccessGrantId, Grantee.GranteeType, Grantee.GranteeIdentifier, Permission, GrantScope, CreatedAt]' \
+  --output table
+```
+
+Filter with `--grantee-identifier <role-arn>` or `--grant-scope 's3://<bucket>/*'`.
+
+### Console
+
+S3 → **Access Grants** (left menu) → select the region → **Grants** tab.
