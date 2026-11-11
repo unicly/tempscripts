@@ -27,5 +27,5 @@ else
   echo "   OK: refused"
 fi
 
-log "grants inventory snapshots:"
-aws s3 ls "s3://${INVENTORY_BUCKET}/access-grants/" --profile "$STORAGE_PROFILE" | tail -3
+log "grants history CSV (last lines):"
+aws s3 cp "s3://${INVENTORY_BUCKET}/${GRANTS_CSV_KEY}" - --profile "$STORAGE_PROFILE" | tail -5

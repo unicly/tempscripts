@@ -2,7 +2,7 @@
 # 17 — Storage: Athena workgroup, Glue database and the three tables
 #   storage_datalake_trail : Storage CloudTrail          (bucket from 04)
 #   feeder_trail           : replicated Feeder CloudTrail (bucket from 05)
-#   access_grants          : grants inventory snapshots   (bucket from 15)
+#   access_grants_history  : append-only grants history CSV (bucket from 15)
 # CloudTrail tables use partition projection (year/month/day) and declare
 # useridentity.sessioncontext.sourceidentity (otherwise Athena can't read it).
 source "$(dirname "$0")/lib.sh"
@@ -58,14 +58,19 @@ athena_run "ddl_$1.sql"
 cloudtrail_ddl storage_datalake_trail "$STORAGE_CT_BUCKET"        "$STORAGE_ACCOUNT_ID"
 cloudtrail_ddl feeder_trail           "$FEEDER_CT_REPLICA_BUCKET" "$FEEDER_ACCOUNT_ID"
 
-cat > ddl_access_grants.sql <<EOF
-CREATE EXTERNAL TABLE IF NOT EXISTS ${GLUE_DATABASE}.access_grants (
-  grant_id string, grant_arn string, grantee_type string, grantee_identifier string,
-  permission string, grant_scope string, location_id string, created_at string, exported_at string
+# Grants history: the append-only CSV written by AccessGrantsInventory (15).
+# All columns are strings (OpenCSVSerde). Header line skipped.
+cat > ddl_access_grants_history.sql <<EOF
+CREATE EXTERNAL TABLE IF NOT EXISTS ${GLUE_DATABASE}.access_grants_history (
+  observed_at string, event string, grant_id string, grant_arn string,
+  grantee_type string, grantee_identifier string, permission string,
+  grant_scope string, location_id string, created_at string
 )
-ROW FORMAT SERDE 'org.openx.data.jsonserde.JsonSerDe'
-LOCATION 's3://${INVENTORY_BUCKET}/access-grants/'
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '"', 'escapeChar' = '\\\\')
+LOCATION 's3://${INVENTORY_BUCKET}/${GRANTS_CSV_PREFIX}'
+TBLPROPERTIES ('skip.header.line.count' = '1')
 EOF
-athena_run ddl_access_grants.sql
+athena_run ddl_access_grants_history.sql
 
-log "done: ${GLUE_DATABASE}.{storage_datalake_trail,feeder_trail,access_grants}"
+log "done: ${GLUE_DATABASE}.{storage_datalake_trail,feeder_trail,access_grants_history}"

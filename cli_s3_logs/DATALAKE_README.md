@@ -26,8 +26,8 @@ already exists and can be re-run. Generated JSON/SQL/zip files go to `build/`.
 | `12_feeder_cloudtrail.sh` | Feeder | Trail + event selectors | 6.2 |
 | `13_feeder_s3_replication.sh` | Feeder | Replication rule | 6.4 |
 | `14_feeder_lambda_datalake.sh` | Feeder | Lambda `DataLakePocObjects` (code in `lambda/`) | 7 |
-| `15_storage_grants_inventory_lambda.sh` | Storage | Inventory bucket + role + Lambda | 8 |
-| `16_storage_grants_inventory_eventbridge.sh` | Storage | EventBridge rules | 8 |
+| `15_storage_grants_inventory_lambda.sh` | Storage | Grants history: bucket + role + Lambda (append-only CSV) | 8 |
+| `16_storage_grants_inventory_eventbridge.sh` | Storage | EventBridge rules: on grant change + daily | 8 |
 | `17_storage_glue_athena.sh` | Storage | Workgroup, Glue database, tables | 9 |
 | `18_test.sh` | both | Tests | 11 |
 | `99_teardown.sh` | both | Remove everything (asks for confirmation) | 12 |
@@ -123,7 +123,7 @@ Five buckets are created, all with **Block Public Access** fully on and
 | `<STORAGE_CT_BUCKET>` | Storage CloudTrail logs | off | yes |
 | `<FEEDER_CT_REPLICA_BUCKET>` | Replicated Feeder CloudTrail logs | **on** (required by replication) | yes |
 | `<ATHENA_RESULTS_BUCKET>` | Athena query results | off | none |
-| `<INVENTORY_BUCKET>` | Grants snapshots | off | none (history is needed) |
+| `<INVENTORY_BUCKET>` | Grants history CSV | off | none (history is needed) |
 
 ### 2.1 Lifecycle for log buckets
 
@@ -688,32 +688,51 @@ call), so you can see which step was denied. The code is in
 
 ---
 
-## 8. Storage account — grants inventory
+## 8. Storage account — grants history
 
 ### 8.1 Why
 
 The attribution query (step 10) needs to translate a grant ID into the grantee
 role ARN. Grants are configuration, not log events: their creation may have
-happened long before the oldest log you still keep. So the current grants are
-exported regularly to a table instead of being hardcoded in the query.
+happened long before the oldest log you still keep. So the grants are recorded
+in a file of their own instead of being hardcoded in the query.
 
 ### 8.2 How
 
-- A Lambda **`AccessGrantsInventory`** lists all grants of the instance and
-  writes them as one JSON-lines file per run to
-  `s3://<INVENTORY_BUCKET>/access-grants/<timestamp>.json`. One line per grant:
-  grant ID, grant ARN, grantee type and identifier, permission, scope,
-  location ID, creation time, export time.
-- Old snapshots are kept, so grants that were deleted later still resolve for
-  old log events. Grant IDs are never reused.
-- Two **EventBridge** rules invoke it: once a day, and right after every
-  `CreateAccessGrant` or `DeleteAccessGrant`. Those calls are CloudTrail
-  management events, which EventBridge receives in the same region without any
-  extra configuration. The daily run catches anything the on-change rule
-  misses.
+- A Lambda **`AccessGrantsInventory`** keeps an **append-only CSV** of all
+  grants: `s3://<INVENTORY_BUCKET>/access-grants-history/access_grants_history.csv`.
+- Each run lists the current grants and compares them with the file:
+  a grant that is new gets a **`CREATED`** line, a grant that has disappeared
+  gets a **`DELETED`** line, and if nothing changed nothing is written.
+- Lines are **never changed or removed**. S3 can't append to an object, so the
+  Lambda reads the file, adds the new lines at the end and uploads the whole
+  file again — the old content unchanged. Because a grant's `CREATED` line
+  stays after the grant is deleted, old log events still resolve to the right
+  role. Grant IDs are never reused.
+- Two runs must not overwrite each other: the function has a **reserved
+  concurrency of 1** (one run at a time; EventBridge invocations wait and are
+  retried), and the upload is **conditional** on the file's ETag — if the file
+  changed since it was read, the upload fails and Lambda retries the run.
+- Columns: `observed_at` (when the Lambda saw the change), `event`,
+  `grant_id`, `grant_arn`, `grantee_type`, `grantee_identifier`, `permission`,
+  `grant_scope`, `location_id`, `created_at` (when the grant was created).
+- Two **EventBridge** rules invoke it: right after every `CreateAccessGrant`
+  or `DeleteAccessGrant`, and once a day as a safety net. Those calls are
+  CloudTrail management events, which EventBridge receives in the same region.
+  Extra runs are harmless — a run without changes appends nothing.
+
+Example content:
+
+```
+"observed_at","event","grant_id","grant_arn","grantee_type","grantee_identifier","permission","grant_scope","location_id","created_at"
+"2026-11-11T08:55:29+00:00","CREATED","9d46a38b-…","arn:aws:s3:<REGION>:<STORAGE_ACCOUNT_ID>:access-grants/default/grant/9d46a38b-…","IAM","arn:aws:iam::<FEEDER_ACCOUNT_ID>:role/FeederAccessGrantsRole","READWRITE","s3://<DATALAKE_BUCKET>/*","0e3b4f96-…","2026-11-09T21:11:22.718000+00:00"
+"2026-11-12T10:02:11+00:00","DELETED","9d46a38b-…", …same details…
+```
 
 Role `AccessGrantsInventoryRole` — trust policy: same as in 3.1 (Lambda
-service). Permissions: `AWSLambdaBasicExecutionRole` plus:
+service). Permissions: `AWSLambdaBasicExecutionRole` plus the policy below.
+`s3:ListBucket` (limited to the prefix) is there so that on the first run a
+missing file is reported as "not found" instead of "access denied".
 
 ```json
 {
@@ -726,14 +745,18 @@ service). Permissions: `AWSLambdaBasicExecutionRole` plus:
     },
     {
       "Effect": "Allow",
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::<INVENTORY_BUCKET>/access-grants/*"
+      "Action": ["s3:GetObject", "s3:PutObject"],
+      "Resource": "arn:aws:s3:::<INVENTORY_BUCKET>/access-grants-history/access_grants_history.csv"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::<INVENTORY_BUCKET>",
+      "Condition": { "StringLike": { "s3:prefix": "access-grants-history/*" } }
     }
   ]
 }
 ```
-
-EventBridge rule `AccessGrantsInventoryDaily`: schedule `rate(1 day)`.
 
 EventBridge rule `AccessGrantsInventoryOnChange`, event pattern:
 
@@ -748,11 +771,15 @@ EventBridge rule `AccessGrantsInventoryOnChange`, event pattern:
 }
 ```
 
+EventBridge rule `AccessGrantsInventoryDaily`: schedule `rate(1 day)`.
+
 Each rule needs a Lambda resource permission allowing
 `events.amazonaws.com` to invoke the function, limited to that rule's ARN.
 
-> Not yet tested end to end: in the PoC the grants lookup used a fixed list.
-> After creating a grant, check that a new snapshot appears within a few minutes.
+> Tested in the PoC: the append logic (first run, no change, new grant,
+> deleted grant, concurrent change) and the Glue table + attribution query.
+> Not yet tested end to end: the EventBridge trigger — after creating a grant,
+> check that a `CREATED` line appears within a few minutes.
 
 ---
 
@@ -766,7 +793,7 @@ Each rule needs a Lambda resource permission allowing
 |---|---|---|
 | `storage_datalake_trail` | Storage CloudTrail | `s3://<STORAGE_CT_BUCKET>/AWSLogs/<STORAGE_ACCOUNT_ID>/CloudTrail/<REGION>/` |
 | `feeder_trail` | Replicated Feeder CloudTrail | `s3://<FEEDER_CT_REPLICA_BUCKET>/AWSLogs/<FEEDER_ACCOUNT_ID>/CloudTrail/<REGION>/` |
-| `access_grants` | Grants snapshots | `s3://<INVENTORY_BUCKET>/access-grants/` |
+| `access_grants_history` | Grants history (CSV) | `s3://<INVENTORY_BUCKET>/access-grants-history/` |
 
 The two CloudTrail tables use AWS's standard CloudTrail schema with
 **partition projection** on `year`/`month`/`day` (no `MSCK REPAIR` needed; queries
@@ -774,9 +801,11 @@ must filter on these columns to avoid full scans). One addition matters:
 `useridentity.sessioncontext` declares a **`sourceidentity`** field. Without it
 Athena can't read `SourceIdentity`, even though it is in the raw logs.
 
-The `access_grants` table is plain JSON lines (OpenX JSON SerDe) with columns
+The `access_grants_history` table reads the CSV with the OpenCSV SerDe
+(header line skipped, all columns strings): `observed_at`, `event`,
 `grant_id`, `grant_arn`, `grantee_type`, `grantee_identifier`, `permission`,
-`grant_scope`, `location_id`, `created_at`, `exported_at`.
+`grant_scope`, `location_id`, `created_at`. It reads every file under the
+prefix, so keep only the history CSV there.
 
 ---
 
@@ -789,7 +818,7 @@ The query links four records, all in Storage:
 | 1 | S3 data event → Access Grants internal `AssumeRole` | session name `access-grants-<uuid>` | yes |
 | 2 | → `GetDataAccess` | timestamp within ±2 s | timing only |
 | 3 | → grant | `matchedAccessGrantArn` | yes |
-| 4 | → grantee role ARN | `access_grants` table | yes |
+| 4 | → grantee role ARN | `access_grants_history` table (`CREATED` line) | yes |
 
 Step 2 is the only weak link: Access Grants records no shared ID between the
 `GetDataAccess` call and the session it creates. In the PoC they were always
@@ -797,9 +826,10 @@ logged in the same second. If two **different** grantees call within the same
 two seconds, one S3 event can appear twice, once per grantee.
 
 ```sql
-WITH grants AS (
+WITH grants AS (               -- grant IDs are never reused, so deleted grants still resolve
     SELECT DISTINCT grant_id, grantee_identifier AS grantee_role_arn
-    FROM cloudtrail_logs.access_grants
+    FROM cloudtrail_logs.access_grants_history
+    WHERE event = 'CREATED'
 ),
 ag_sessions AS (
     SELECT from_iso8601_timestamp(eventtime) AS t,
@@ -825,7 +855,7 @@ s3_events AS (
     WHERE year = '2026' AND month = '11'
       AND eventsource = 's3.amazonaws.com'
       AND eventname IN ('GetObject', 'PutObject', 'DeleteObject', 'CopyObject', 'ListObjects')
-      AND useridentity.arn LIKE '%S3AccessGrantsLocationRole/access-grants-%'
+      AND regexp_like(useridentity.arn, '/access-grants-[a-f0-9-]+$')   -- any location role name
 )
 SELECT DISTINCT
     s3.eventtime,
@@ -843,8 +873,10 @@ ORDER BY s3.eventtime DESC
 
 Adjust `year` and `month` in the three CTEs to the period you query.
 
-Two other variants — one that joins Storage's and Feeder's logs, one with the
-grants hardcoded — are in [SQL_QUERIES.md](SQL_QUERIES.md).
+This is Query 3 in [SQL_QUERIES.md](SQL_QUERIES.md) (plus the
+`source_identity` column). Two other variants — one that joins Storage's and
+Feeder's logs, one with the grants hardcoded — are there too, with queries to
+list the grants.
 
 What the columns tell you:
 
@@ -875,13 +907,14 @@ What the columns tell you:
    later than data events), then run the attribution query. Each of your test
    operations should appear with `FeederAccessGrantsRole` as grantee. Don't
    empty the log buckets before the logs have been read.
-5. Create a test grant and check that a new inventory snapshot appears.
+5. Create a test grant and check that a `CREATED` line for it is appended to the
+   grants history CSV within a few minutes; delete it and check for `DELETED`.
 
 ---
 
 ## 12. Teardown
 
-Reverse order: EventBridge rules and their targets, the inventory Lambda, both
+Reverse order: EventBridge rules and their targets, the grants history Lambda, both
 trails, the RAM share, the grant and location, Glue tables and database, the
 Athena workgroup, the Feeder Lambda, the replication rule, then the IAM roles
 (remove inline policies and detach managed policies first). Versioned buckets

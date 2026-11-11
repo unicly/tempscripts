@@ -48,7 +48,7 @@ for r in AccessGrantsInventoryOnChange AccessGrantsInventoryDaily; do
   quiet aws events delete-rule --name "$r" "${S[@]}"
 done
 quiet aws lambda delete-function --function-name AccessGrantsInventory "${S[@]}"
-for t in access_grants feeder_trail storage_datalake_trail; do
+for t in access_grants_history access_grants feeder_trail storage_datalake_trail; do
   quiet aws glue delete-table --database-name "$GLUE_DATABASE" --name "$t" "${S[@]}"
 done
 quiet aws glue delete-database --name "$GLUE_DATABASE" "${S[@]}"

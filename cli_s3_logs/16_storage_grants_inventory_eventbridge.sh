@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# 16 — Storage: EventBridge rules that run AccessGrantsInventory (15)
-#   AccessGrantsInventoryDaily     : once a day
+# 16 — Storage: EventBridge rules that run AccessGrantsInventory (15), which
+# appends grant changes to the grants history CSV.
 #   AccessGrantsInventoryOnChange  : after every CreateAccessGrant / DeleteAccessGrant
+#   AccessGrantsInventoryDaily     : once a day, as a safety net for missed events
 # Those calls are CloudTrail management events; EventBridge receives them in the
-# same region without extra setup. Not tested end to end in the PoC — after
-# creating a grant, check that a new snapshot appears within a few minutes.
+# same region. A run without changes appends nothing, so extra runs are harmless.
+# Not tested end to end in the PoC — after creating a grant, check that a
+# CREATED line appears in the CSV within a few minutes.
 source "$(dirname "$0")/lib.sh"
 
 FN_ARN="arn:aws:lambda:${REGION}:${STORAGE_ACCOUNT_ID}:function:AccessGrantsInventory"

@@ -139,20 +139,25 @@ aws s3control list-access-grants --account-id <STORAGE_ACCOUNT_ID> --region <REG
   --query 'AccessGrantsList[].[AccessGrantId, Grantee.GranteeIdentifier]' --output text
 ```
 
-**README query (inventory table):**
+**Query 3 / README query (grants history table):**
 
 ```sql
-SELECT grant_id, grantee_identifier, exported_at
-FROM cloudtrail_logs.access_grants
-ORDER BY exported_at DESC
+SELECT observed_at, event, grant_id, grantee_identifier
+FROM cloudtrail_logs.access_grants_history
+ORDER BY observed_at DESC
 LIMIT 20;
 ```
 
-- **No rows** → no snapshot yet, or the table points elsewhere. Run the
-  inventory Lambda once (`aws lambda invoke --function-name AccessGrantsInventory …`)
-  and check `s3://<INVENTORY_BUCKET>/access-grants/` has a `.json` file.
-- Rows but your `grant_id` from check 4 isn't there → the grant was created
-  after the last snapshot; invoke the Lambda again.
+- **No rows** → the Lambda hasn't run yet, or the table points elsewhere. Run
+  it once (`aws lambda invoke --function-name AccessGrantsInventory …`) and
+  check that `s3://<INVENTORY_BUCKET>/access-grants-history/access_grants_history.csv`
+  exists. The CloudWatch log of the run shows `appended` / `created` / `deleted`.
+- **Strange rows** (shifted columns, a header line as data) → another file
+  sits under `access-grants-history/`; the table reads every file in that
+  prefix. Keep only the CSV there.
+- Rows but your `grant_id` from check 4 has no `CREATED` line → the Lambda
+  hasn't run since the grant was created (EventBridge rule missing or the
+  event not delivered yet); invoke the Lambda once — it appends the missing grant.
 
 ---
 
@@ -177,6 +182,6 @@ Query 1 uses a LEFT JOIN here, so a missing Feeder copy gives an empty
 |---|---|---|
 | table → logs | `LOCATION` = real trail path | organization trail path, other region, other bucket |
 | S3 data events | data-event selector on the bucket | wrong bucket name in selector |
-| S3 event filter | location role name in `LIKE` | existing Access Grants setup with another role name |
+| S3 event filter | location role name in `LIKE` (Queries 1–2) | existing Access Grants setup with another role name; Query 3 matches any name |
 | AssumeRole + GetDataAccess | management events | selector, or not delivered yet |
-| grant → role | grant IDs in lookup | PoC IDs left in Query 2, empty `access_grants` table |
+| grant → role | grant IDs in lookup | PoC IDs left in Query 2, grant missing from `access_grants_history` |
