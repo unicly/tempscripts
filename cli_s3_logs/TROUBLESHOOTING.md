@@ -152,8 +152,8 @@ LIMIT 20;
   it once (`aws lambda invoke --function-name AccessGrantsInventory …`) and
   check that `s3://<INVENTORY_BUCKET>/access-grants-history/access_grants_history.csv`
   exists. The CloudWatch log of the run shows `appended` / `created` / `deleted`.
-- **Strange rows** (shifted columns, a header line as data) → another file
-  sits under `access-grants-history/`; the table reads every file in that
+- **Strange rows** (shifted columns, a header line as data) → see check 7, or
+  another file sits under `access-grants-history/`; the table reads every file in that
   prefix. Keep only the CSV there.
 - Rows but your `grant_id` from check 4 has no `CREATED` line → the Lambda
   hasn't run since the grant was created (EventBridge rule missing or the
@@ -173,6 +173,52 @@ LIMIT 20;
 
 Query 1 uses a LEFT JOIN here, so a missing Feeder copy gives an empty
 `grantee_role_arn` — not 0 rows. If Query 1 returns 0, the cause is in checks 1–4.
+
+---
+
+## 7. The CSV header appears as a row in `access_grants_history`
+
+Symptom: a row with `observed_at = 'observed_at'`, `event = 'event'`, … in the
+results. Fix: the table property **`skip.header.line.count = 1`** — Athena then
+skips the first line of every file under the table's location.
+`17_storage_glue_athena.sh` sets it; tables created another way may lack it.
+
+**In the DDL** (when creating the table):
+
+```sql
+CREATE EXTERNAL TABLE cloudtrail_logs.access_grants_history ( … )
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '"', 'escapeChar' = '\\')
+LOCATION 's3://<INVENTORY_BUCKET>/access-grants-history/'
+TBLPROPERTIES ('skip.header.line.count' = '1');
+```
+
+**On an existing table** (Athena):
+
+```sql
+ALTER TABLE cloudtrail_logs.access_grants_history
+SET TBLPROPERTIES ('skip.header.line.count' = '1');
+```
+
+**In the Glue console:** Data Catalog → **Tables** → the table → **Actions** →
+**Edit table** → **Table properties** → **Add**: key `skip.header.line.count`,
+value `1` → **Save**.
+
+**With a Glue crawler:** create a **custom CSV classifier** with
+**Column headings: Has headings** and attach it to the crawler. It then uses the
+header for column names and sets `skip.header.line.count` itself. Without it the
+crawler often doesn't detect the header — typically when all columns are
+strings, as here.
+
+Good to know:
+
+- The header is skipped **in every file** under the location, so each file needs
+  exactly one header line at the top. The Lambda writes it once, when it creates
+  the file. A second file without a header under the same prefix would lose its
+  first data line.
+- With **OpenCSVSerde** every column is a `string`; convert in the query if
+  needed (`CAST`, `from_iso8601_timestamp`).
+- The property only affects reading; the file isn't changed.
 
 ---
 
