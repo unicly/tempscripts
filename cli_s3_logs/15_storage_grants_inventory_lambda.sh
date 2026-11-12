@@ -38,8 +38,14 @@ deploy_lambda "$STORAGE_PROFILE" AccessGrantsInventory \
 # One run at a time: the file is read, extended and written back, so two
 # parallel runs could otherwise race. (The write is also conditional on the
 # ETag.) Throttled EventBridge invocations are queued and retried by Lambda.
-aws lambda put-function-concurrency --function-name AccessGrantsInventory \
-  --reserved-concurrent-executions 1 --region "$REGION" --profile "$STORAGE_PROFILE" >/dev/null
+# New accounts often have a concurrency limit of 10, and Lambda requires 10 to
+# stay unreserved — then this call fails. That's not fatal: the ETag-conditional
+# write alone still prevents lost lines (a conflicting run fails and is retried).
+if ! aws lambda put-function-concurrency --function-name AccessGrantsInventory \
+       --reserved-concurrent-executions 1 --region "$REGION" --profile "$STORAGE_PROFILE" >/dev/null 2>&1; then
+  echo "   WARNING: could not reserve concurrency 1 (account concurrency limit too low?)." >&2
+  echo "            Continuing: conditional writes still protect the CSV." >&2
+fi
 
 log "first run:"
 retry 3 aws lambda invoke --function-name AccessGrantsInventory --region "$REGION" --profile "$STORAGE_PROFILE" \

@@ -3,6 +3,8 @@
 # Needed in Storage for: who assumed the grantee role (AssumeRole) and the full
 # session ARN of GetDataAccess. A data-events-only trail would capture nothing
 # useful here: data events made with Access Grants credentials go to Storage.
+# Using an existing trail? Keep its management events ON (Read + Write); you may
+# add data-event selectors, but put-event-selectors REPLACES all selectors.
 source "$(dirname "$0")/lib.sh"
 
 if aws cloudtrail get-trail --name "$FEEDER_TRAIL" --region "$REGION" --profile "$FEEDER_PROFILE" >/dev/null 2>&1; then

@@ -4,9 +4,11 @@
 #   AccessGrantsInventoryOnChange  : after every CreateAccessGrant / DeleteAccessGrant
 #   AccessGrantsInventoryDaily     : once a day, as a safety net for missed events
 # Those calls are CloudTrail management events; EventBridge receives them in the
-# same region. A run without changes appends nothing, so extra runs are harmless.
-# Not tested end to end in the PoC — after creating a grant, check that a
-# CREATED line appears in the CSV within a few minutes.
+# same region, on the DEFAULT event bus only. A run without changes appends
+# nothing, so extra runs are harmless.
+# Tested 2026-11-12: the on-change rule fires when a grant is created.
+# The pattern is compared exactly, case included: "AWS API Call via CloudTrail"
+# (capital T) — "Cloudtrail" never matches. See TROUBLESHOOTING.md check 8.
 source "$(dirname "$0")/lib.sh"
 
 FN_ARN="arn:aws:lambda:${REGION}:${STORAGE_ACCOUNT_ID}:function:AccessGrantsInventory"

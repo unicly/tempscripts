@@ -1,3 +1,10 @@
+> ⚠️ **Outdated — kept for reference only.** This single-file guide was
+> replaced by the numbered scripts in this folder (`01_…sh` … `99_teardown.sh`,
+> configured by `.env`), explained in `DATALAKE_README.md`. Differences: the
+> grants inventory here writes JSON snapshots, the scripts keep an append-only
+> CSV history (`access_grants_history`), and the queries here filter on the
+> location role name. Use the scripts.
+
 # Data lake with S3 Access Grants — setup with the AWS CLI
 
 Rebuilds, in two new accounts and with the AWS CLI only, the setup tested on

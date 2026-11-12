@@ -5,10 +5,28 @@ AWS accounts and why each piece is there. It contains no CLI commands — those
 are the numbered scripts in this folder, configured by one file, `.env`.
 Here you find the reasoning and the **JSON of every policy and configuration**.
 
-**Running the scripts:** edit `.env` (account IDs, profiles,
-`STORAGE_ADMIN_ARN`, bucket names), then run the scripts in number order with
-**bash** (`bash 01_feeder_iam_lambda_roles.sh`, …). Each script checks what
-already exists and can be re-run. Generated JSON/SQL/zip files go to `build/`.
+**Before you start**
+
+- AWS CLI v2 and `zip` installed; run everything in **bash**, not zsh
+  (`bash 01_…sh`).
+- Two CLI profiles with admin rights: one for the Feeder account, one for the
+  Storage account.
+- An **S3 Access Grants instance already exists** in the Storage account, in the
+  region you'll use. The scripts don't create it. Check with
+  `aws s3control get-access-grants-instance --account-id <STORAGE_ACCOUNT_ID> --region <REGION>`.
+
+**Running the scripts**
+
+1. Edit `.env`: account IDs, profile names, region, `STORAGE_ADMIN_ARN` (read
+   section 2.2 first), bucket names.
+2. Run the scripts **in number order**: `bash 01_feeder_iam_lambda_roles.sh`,
+   then `02_…`, and so on. The scripts refuse to run while `.env` still holds
+   the example values.
+3. Each script checks what already exists and can be re-run safely. Script 03
+   asks for confirmation before applying the bucket policy.
+4. Generated JSON/SQL/zip files go to `build/` (ignored by git).
+5. Then test with `18_test.sh` (section 11) and query with `SQL_QUERIES.md`.
+   If something returns nothing, use `TROUBLESHOOTING.md`.
 
 | Script | Account | Task | Section below |
 |---|---|---|---|
@@ -48,7 +66,7 @@ Placeholders used throughout:
 | `<FEEDER_CT_BUCKET>` | CloudTrail logs of the Feeder account (Feeder) |
 | `<FEEDER_CT_REPLICA_BUCKET>` | Replica of the Feeder CloudTrail logs (Storage) |
 | `<ATHENA_RESULTS_BUCKET>` | Athena query results (Storage) |
-| `<INVENTORY_BUCKET>` | Snapshots of the Access Grants grants (Storage) |
+| `<INVENTORY_BUCKET>` | Grants history CSV (Storage) |
 | `<STORAGE_ADMIN_ARN>` | IAM role or user used for admin work in Storage |
 | `<AG_INSTANCE_ARN>` | `arn:aws:s3:<REGION>:<STORAGE_ACCOUNT_ID>:access-grants/default` |
 
@@ -92,8 +110,9 @@ These findings drive several design choices below:
 
 - **The S3 log entry never shows the real caller.** S3 calls made with Access
   Grants credentials appear in CloudTrail as
-  `S3AccessGrantsLocationRole/access-grants-<uuid>`, a session that Access Grants
-  creates itself. There is no `onBehalfOf` field for IAM principals.
+  `<location role>/access-grants-<uuid>` (here
+  `S3AccessGrantsLocationRole/access-grants-<uuid>`), a session that Access
+  Grants creates itself. There is no `onBehalfOf` field for IAM principals.
 - **Access Grants does not record the caller's access key** anywhere you can
   join on. It only passes along a `SourceIdentity` if the caller set one — and
   callers can't be forced to.
@@ -127,7 +146,8 @@ Five buckets are created, all with **Block Public Access** fully on and
 
 ### 2.1 Lifecycle for log buckets
 
-Log buckets keep logs for a fixed number of days (30 below). Because the
+Log buckets keep logs for a fixed number of days: `LOG_RETENTION_DAYS` in
+`.env`, 30 in the example below. Because the
 replica bucket is versioned, the rule also removes old versions and the delete
 markers left behind — otherwise deleted logs keep occupying (and costing)
 storage invisibly. The same rule is used on the Feeder log bucket.
@@ -198,7 +218,7 @@ except the one admin role you name here.
 
 ### 2.3 Replica bucket policy — accept replication from Feeder
 
-Lets the Feeder replication role (step 5) write replicated objects and hand
+Lets the Feeder replication role (section 6.3, script 02) write replicated objects and hand
 their ownership to Storage. Apply it **after** that role exists: IAM checks the
 principal when the policy is saved.
 
@@ -312,14 +332,21 @@ plugin; harmless otherwise.)
 }
 ```
 
-These roles are created before the grant (step 4), because the grant names
+These roles are created before the grant (section 4), because the grant names
 `FeederAccessGrantsRole` as its grantee.
 
 ---
 
 ## 4. Storage account — Access Grants
 
-The Access Grants instance already exists. Three things are attached to it.
+The Access Grants instance already exists (the scripts don't create it).
+Three things are attached to it: a location role, a location with a grant, and
+a RAM share.
+
+**Existing Access Grants setup?** If a location for the data lake bucket
+already exists, script 08 reuses it — with whatever location role it has — and
+the role from 4.1 stays unused. That role's name is what appears in the S3 log
+entries; the queries in `SQL_QUERIES.md` match any role name.
 
 ### 4.1 Location role `S3AccessGrantsLocationRole`
 
@@ -499,7 +526,7 @@ logs, but only for this trail:
 
 ### 6.1 Why Feeder's logs go to Storage
 
-The grantee role ARN can be found from Storage's logs alone (step 9). But two
+The grantee role ARN can be found from Storage's logs alone (section 10). But two
 things are **only** in Feeder's logs:
 
 - the full session ARN of the `GetDataAccess` caller
@@ -533,6 +560,12 @@ Event selectors — management events only:
   }
 ]
 ```
+
+> Using an existing Feeder trail? Its **management events must be on**
+> (console: trail → *Management events* → Read and Write). A trail with only
+> data events logs no `GetDataAccess` in Feeder, and Query 1 then can't find the
+> grantee ARN. You may add data-event selectors on top; note that saving
+> selectors with the CLI replaces all of them.
 
 Bucket policy for `<FEEDER_CT_BUCKET>`:
 
@@ -674,13 +707,18 @@ For every call it:
    `s3://<DATALAKE_BUCKET>/<key>` with `WRITE` to create or delete;
 3. makes the S3 call with the returned credentials.
 
-Events:
+Events — **one JSON object per invocation** (a list of actions in one event
+doesn't work):
 
-```json
-{ "action": "list" }
-{ "action": "create", "key": "a.txt", "body": "hello" }
-{ "action": "delete", "key": "a.txt" }
-```
+| Test event | Effect |
+|---|---|
+| `{ "action": "list" }` | lists all files (also the default without `action`) |
+| `{ "action": "create", "key": "a.txt", "body": "hello" }` | creates `a.txt`; without `key` a name `upload-<timestamp>-<id>.txt` is generated |
+| `{ "action": "delete", "key": "a.txt" }` | deletes `a.txt` |
+| add `"no_source_identity": true` | same, without setting `SourceIdentity` (testing) |
+
+In the Lambda console, save each as a named test event (**Test** → **Create new
+event**) and run them one after another; `18_test.sh` runs a sequence from the CLI.
 
 On failure it returns `operation` (`AssumeRole`, `GetDataAccess` or the S3
 call), so you can see which step was denied. The code is in
@@ -692,7 +730,7 @@ call), so you can see which step was denied. The code is in
 
 ### 8.1 Why
 
-The attribution query (step 10) needs to translate a grant ID into the grantee
+The attribution query (section 10) needs to translate a grant ID into the grantee
 role ARN. Grants are configuration, not log events: their creation may have
 happened long before the oldest log you still keep. So the grants are recorded
 in a file of their own instead of being hardcoded in the query.
@@ -709,10 +747,12 @@ in a file of their own instead of being hardcoded in the query.
   file again — the old content unchanged. Because a grant's `CREATED` line
   stays after the grant is deleted, old log events still resolve to the right
   role. Grant IDs are never reused.
-- Two runs must not overwrite each other: the function has a **reserved
-  concurrency of 1** (one run at a time; EventBridge invocations wait and are
-  retried), and the upload is **conditional** on the file's ETag — if the file
-  changed since it was read, the upload fails and Lambda retries the run.
+- Two runs must not overwrite each other: the upload is **conditional** on the
+  file's ETag — if the file changed since it was read, the upload fails and
+  Lambda retries the run. In addition the script reserves a **concurrency of
+  1** (one run at a time). New accounts with a concurrency limit of 10 can't
+  reserve any; the script then only warns, and the conditional write still
+  protects the file.
 - Columns: `observed_at` (when the Lambda saw the change), `event`,
   `grant_id`, `grant_arn`, `grantee_type`, `grantee_identifier`, `permission`,
   `grant_scope`, `location_id`, `created_at` (when the grant was created).
@@ -771,15 +811,45 @@ EventBridge rule `AccessGrantsInventoryOnChange`, event pattern:
 }
 ```
 
+Values are compared **exactly, including upper/lower case**:
+`"AWS API Call via Cloudtrail"` (lowercase *t*) is valid JSON but never
+matches, and the rule silently never fires.
+
 EventBridge rule `AccessGrantsInventoryDaily`: schedule `rate(1 day)`.
 
 Each rule needs a Lambda resource permission allowing
 `events.amazonaws.com` to invoke the function, limited to that rule's ARN.
 
-> Tested in the PoC: the append logic (first run, no change, new grant,
-> deleted grant, concurrent change) and the Glue table + attribution query.
-> Not yet tested end to end: the EventBridge trigger — after creating a grant,
-> check that a `CREATED` line appears within a few minutes.
+### 8.3 Setting up the rules in the console (instead of script 16)
+
+Storage account, **same region** as the Access Grants instance.
+
+**On-change rule:** EventBridge → **Rules** → **Create rule**
+
+1. Name `AccessGrantsInventoryOnChange`, event bus **`default`** (AWS service
+   events only arrive on the default bus — don't create a custom bus), rule
+   type **Rule with an event pattern** → Next.
+2. Event source **AWS events or EventBridge partner events**, creation method
+   **Custom pattern (JSON editor)**, paste the pattern above → Next.
+3. Target **AWS service** → **Lambda function** → `AccessGrantsInventory` →
+   Next. The console adds the Lambda permission for EventBridge itself.
+4. Next → **Create rule**.
+
+**Daily run:** EventBridge → **Scheduler** → **Schedules** → **Create schedule**:
+name `AccessGrantsInventoryDaily`, **Recurring schedule** → **Rate-based** `1`
+days, flexible time window **Off**; target **AWS Lambda – Invoke** →
+`AccessGrantsInventory`; permissions **Create new role for this schedule**.
+Use this *or* the rule from script 16, not both. It's a safety net: a missed
+grant change would otherwise only be caught at the next change.
+
+**Check it works:** create a test grant, wait 2–5 minutes, then look at the
+rule's **Monitoring** tab (`TriggeredRules`, `Invocations`), the Lambda's
+CloudWatch log (`"created": 1`) and the last line of the CSV. If nothing
+happens, follow `TROUBLESHOOTING.md` check 8.
+
+> Tested: the append logic (first run, no change, new grant, deleted grant,
+> concurrent change) and the Glue table + attribution query in the PoC
+> (2026-11-11); the on-change rule firing on a new grant (2026-11-12).
 
 ---
 

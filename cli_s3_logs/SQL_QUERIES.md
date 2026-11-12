@@ -16,8 +16,15 @@ for comparison and troubleshooting.
 | Needs a grant list | no | yes, inline in the query | no — table `access_grants_history` |
 | Where the role ARN comes from | Feeder's `GetDataAccess` (`sessionissuer.arn`); for Storage grantees Storage's own | the grant → grantee list | the grant's `CREATED` line in the history CSV |
 | Breaks when | Feeder logs are missing or not yet replicated | a grant is created or deleted and the list isn't updated | the history Lambda hasn't run since the grant was created |
-| Location role name | `S3AccessGrantsLocationRole` (edit if yours differs) | `S3AccessGrantsLocationRole` (edit if yours differs) | any name |
 | Verified on | 2026-11-09, run 22:03 UTC (no RAM) | 2026-11-09, runs 22:31 / 22:43 UTC (RAM share) | 2026-11-11: same 17 rows as Query 2, incl. a grant marked `DELETED` |
+
+**How to run a query**
+
+1. Storage account → **Athena** → **Query editor**.
+2. Top right: workgroup **`cloudtrail-correlation`** (results go to the Athena
+   results bucket). Left: data source `AwsDataCatalog`, database
+   **`cloudtrail_logs`**.
+3. Paste the query, set `year` / `month` in every CTE, **Run**.
 
 **Common to all three**
 
@@ -27,6 +34,8 @@ for comparison and troubleshooting.
 - If two **different** grantees call within the same 2 seconds, one S3 event
   can appear twice, once per grantee.
 - One grant per consuming role, otherwise the grantee isn't unique.
+- The S3 events are recognised by the `access-grants-<uuid>` session at the end
+  of the caller ARN, whatever your location role is called.
 - Set `year` and `month` in every CTE to the period you query (partition
   filter — avoids scanning all logs).
 - CloudTrail delivers after 5–15 minutes; management events can arrive later
@@ -131,7 +140,7 @@ s3_events AS (
     WHERE year = '2026' AND month = '11'
       AND eventsource = 's3.amazonaws.com'
       AND eventname IN ('GetObject', 'PutObject', 'DeleteObject', 'CopyObject', 'ListObjects')
-      AND useridentity.arn LIKE '%S3AccessGrantsLocationRole/access-grants-%'
+      AND regexp_like(useridentity.arn, '/access-grants-[a-f0-9-]+$')   -- any location role name
 )
 SELECT DISTINCT
     s3.eventtime,
@@ -168,11 +177,12 @@ Uses only Storage's logs. The grant matched by each `GetDataAccess`
 Generate the list from the live grants:
 
 ```
-aws s3control list-access-grants --account-id <STORAGE_ACCOUNT_ID> --region <REGION> \
+aws s3control list-access-grants --account-id <STORAGE_ACCOUNT_ID> --region <REGION> --profile <storage> \
   --query 'AccessGrantsList[].[AccessGrantId, Grantee.GranteeIdentifier]' --output text
 ```
 
-and replace the `VALUES` rows. The two rows below are the PoC's grants.
+and replace the `VALUES` rows — **the two rows below are the PoC's grants and
+won't match anything in your accounts.** Query 3 avoids this step.
 
 ```sql
 WITH grants (grant_id, grantee_role_arn) AS (   -- from: aws s3control list-access-grants
@@ -203,7 +213,7 @@ s3_events AS (
     WHERE year = '2026' AND month = '11'
       AND eventsource = 's3.amazonaws.com'
       AND eventname IN ('GetObject', 'PutObject', 'DeleteObject', 'CopyObject', 'ListObjects')
-      AND useridentity.arn LIKE '%S3AccessGrantsLocationRole/access-grants-%'
+      AND regexp_like(useridentity.arn, '/access-grants-[a-f0-9-]+$')   -- any location role name
 )
 SELECT DISTINCT
     s3.eventtime,
@@ -246,10 +256,6 @@ The Lambda runs after every `CreateAccessGrant` / `DeleteAccessGrant`
 are never changed or removed. A grant's `CREATED` line therefore stays after
 the grant is deleted, so old log events still resolve to the right role —
 grant IDs are never reused.
-
-The S3 event filter matches any location role name (`/access-grants-<uuid>` at
-the end of the caller ARN), so this query works with an existing Access Grants
-setup whose location role isn't called `S3AccessGrantsLocationRole`.
 
 ```sql
 WITH grants AS (               -- from the append-only grants history (Glue table)
