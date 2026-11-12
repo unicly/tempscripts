@@ -6,3 +6,15 @@
       "eventName": ["CreateAccessGrant", "DeleteAccessGrant"]
     }
   }
+
+{
+    "version": "0",
+    "id": "test",
+    "detail-type": "AWS API Call via CloudTrail",
+    "source": "aws.s3",
+    "account": "<STORAGE_ACCOUNT_ID>",
+    "time": "<eventTime from the record>",
+    "region": "<awsRegion from the record>",
+    "resources": [],
+    "detail": <paste the CloudTrail Event record here>
+}
