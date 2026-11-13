@@ -37,23 +37,18 @@ Three buckets, all in the Storage account:
 | `$ATHENA_RESULTS_BUCKET` | Athena query results | none | none |
 | `$INVENTORY_BUCKET` | Grants history CSV (export of Access Grants) | none | none: the history must be kept |
 
-Every bucket gets **Block Public Access** fully on and default encryption
-**SSE-S3**.
+New buckets get **Block Public Access** fully on and default encryption
+**SSE-S3** automatically (S3 defaults since 2023), so no extra commands are
+needed for that; check 1.4 confirms it.
 
 ### 1.1 CloudTrail log bucket
 
-Create the bucket, block public access, turn on encryption:
+Create the bucket:
 
 ```bash
 aws s3api create-bucket --bucket "$STORAGE_CT_BUCKET" \
   --region "$REGION" --profile "$STORAGE_PROFILE" \
   --create-bucket-configuration "LocationConstraint=$REGION"
-
-aws s3api put-public-access-block --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-
-aws s3api put-bucket-encryption --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 ```
 
 **Bucket policy:** CloudTrail may check the bucket ACL and write log files, but
@@ -135,12 +130,6 @@ The lifecycle rules apply to the whole bucket: keep only CloudTrail logs in it.
 aws s3api create-bucket --bucket "$ATHENA_RESULTS_BUCKET" \
   --region "$REGION" --profile "$STORAGE_PROFILE" \
   --create-bucket-configuration "LocationConstraint=$REGION"
-
-aws s3api put-public-access-block --bucket "$ATHENA_RESULTS_BUCKET" --profile "$STORAGE_PROFILE" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-
-aws s3api put-bucket-encryption --bucket "$ATHENA_RESULTS_BUCKET" --profile "$STORAGE_PROFILE" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 ```
 
 **Policy:** no bucket policy. Athena writes the results with the permissions of
@@ -153,12 +142,6 @@ The Athena workgroup (later step) points at this bucket.
 aws s3api create-bucket --bucket "$INVENTORY_BUCKET" \
   --region "$REGION" --profile "$STORAGE_PROFILE" \
   --create-bucket-configuration "LocationConstraint=$REGION"
-
-aws s3api put-public-access-block --bucket "$INVENTORY_BUCKET" --profile "$STORAGE_PROFILE" \
-  --public-access-block-configuration BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
-
-aws s3api put-bucket-encryption --bucket "$INVENTORY_BUCKET" --profile "$STORAGE_PROFILE" \
-  --server-side-encryption-configuration '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
 ```
 
 **Policy:** no bucket policy and **no lifecycle rule**: the history must be kept.
