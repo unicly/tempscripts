@@ -22,9 +22,6 @@ export STORAGE_TRAIL="StorageDataLakeTrail"      # trail created in a later step
 export LOG_RETENTION_DAYS=30
 ```
 
-In `us-east-1`, leave out `--create-bucket-configuration` in the
-`create-bucket` commands below.
-
 ---
 
 ## 1. Buckets
@@ -46,9 +43,7 @@ needed for that; check 1.4 confirms it.
 Create the bucket:
 
 ```bash
-aws s3api create-bucket --bucket "$STORAGE_CT_BUCKET" \
-  --region "$REGION" --profile "$STORAGE_PROFILE" \
-  --create-bucket-configuration "LocationConstraint=$REGION"
+aws s3 mb "s3://$STORAGE_CT_BUCKET" --region "$REGION" --profile "$STORAGE_PROFILE"
 ```
 
 **Bucket policy:** CloudTrail may check the bucket ACL and write log files, but
@@ -127,9 +122,7 @@ The lifecycle rules apply to the whole bucket: keep only CloudTrail logs in it.
 ### 1.2 Athena results bucket
 
 ```bash
-aws s3api create-bucket --bucket "$ATHENA_RESULTS_BUCKET" \
-  --region "$REGION" --profile "$STORAGE_PROFILE" \
-  --create-bucket-configuration "LocationConstraint=$REGION"
+aws s3 mb "s3://$ATHENA_RESULTS_BUCKET" --region "$REGION" --profile "$STORAGE_PROFILE"
 ```
 
 **Policy:** no bucket policy. Athena writes the results with the permissions of
@@ -139,9 +132,7 @@ The Athena workgroup (later step) points at this bucket.
 ### 1.3 Grants history bucket (export of Access Grants as CSV)
 
 ```bash
-aws s3api create-bucket --bucket "$INVENTORY_BUCKET" \
-  --region "$REGION" --profile "$STORAGE_PROFILE" \
-  --create-bucket-configuration "LocationConstraint=$REGION"
+aws s3 mb "s3://$INVENTORY_BUCKET" --region "$REGION" --profile "$STORAGE_PROFILE"
 ```
 
 **Policy:** no bucket policy and **no lifecycle rule**: the history must be kept.
