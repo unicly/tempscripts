@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 04 — Storage: bucket for the Storage CloudTrail logs, with lifecycle and the
+# 03 — Storage: bucket for the Storage CloudTrail logs, with lifecycle and the
 # policy that lets only the StorageDataLakeTrail trail write to it.
 source "$(dirname "$0")/lib.sh"
 

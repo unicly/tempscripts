@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 08 — Storage: Access Grants location for the data lake + READWRITE grant to
+# 06 — Storage: Access Grants location for the data lake + READWRITE grant to
 # Feeder's FeederAccessGrantsRole. Reuses an existing location/grant if found.
 # Rule for auditing: one grant per consuming role.
 source "$(dirname "$0")/lib.sh"

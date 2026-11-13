@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 09 — Storage + Feeder: share the Access Grants instance with the Feeder
+# 07 — Storage + Feeder: share the Access Grants instance with the Feeder
 # account through AWS RAM, and accept the invitation in Feeder.
 # Without this, GetDataAccess from Feeder fails with AccessDenied.
 # Same AWS Organization? You can share with the org/OU instead (no invitation).

@@ -3,7 +3,7 @@
 #   FeederDataLakeLambdaRole  : Lambda exec role, may only assume the grantee role
 #   FeederAccessGrantsRole    : the grantee (grant in Storage is issued to it),
 #                               may only call GetDataAccess on the Storage instance
-# Must exist before the grant (08) because the grant names the grantee role.
+# Must exist before the grant (06) because the grant names the grantee role.
 source "$(dirname "$0")/lib.sh"
 
 # --- FeederDataLakeLambdaRole -------------------------------------------------

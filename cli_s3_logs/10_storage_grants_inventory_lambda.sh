@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# 15 — Storage: grants history. Bucket + role + Lambda AccessGrantsInventory,
+# 10 — Storage: grants history. Bucket + role + Lambda AccessGrantsInventory,
 # which keeps an APPEND-ONLY CSV of all S3 Access Grants grants:
 #   s3://<INVENTORY_BUCKET>/<GRANTS_CSV_KEY>
 # Each run appends a CREATED line for every new grant and a DELETED line for
 # every grant that disappeared. Existing lines are never changed or removed.
-# Triggers (EventBridge): 16. Glue table access_grants_history: 17.
+# Triggers (EventBridge): 11. Glue table access_grants_history: 12.
 # Code: lambda/access_grants_history.py.
 source "$(dirname "$0")/lib.sh"
 

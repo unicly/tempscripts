@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 03 — Storage: data lake bucket, reachable only through S3 Access Grants.
+# 02 — Storage: data lake bucket, reachable only through S3 Access Grants.
 # Bucket policy denies every request unless it uses credentials vended by the
 # Access Grants instance, comes from an AWS service, or is made by STORAGE_ADMIN_ARN.
 # WARNING: a wrong STORAGE_ADMIN_ARN locks you out (only root can remove the policy).

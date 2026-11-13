@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 07 — Storage: S3AccessGrantsLocationRole. Access Grants assumes it to vend
+# 05 — Storage: S3AccessGrantsLocationRole. Access Grants assumes it to vend
 # scoped credentials; it is the only identity with real S3 permissions on the
 # data lake. Skip if your existing Access Grants setup already has a location
-# for the data lake bucket: 08 reuses an existing location with its own role,
+# for the data lake bucket: 06 reuses an existing location with its own role,
 # and this role then stays unused. The role's name shows up as the caller of
 # every S3 event (…:assumed-role/<role>/access-grants-<uuid>).
 # (Bucket uses SSE-KMS? Add kms:Decrypt / kms:GenerateDataKey on the key.)

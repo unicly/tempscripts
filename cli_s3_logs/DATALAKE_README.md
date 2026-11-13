@@ -22,33 +22,28 @@ Here you find the reasoning and the **JSON of every policy and configuration**.
 2. Run the scripts **in number order**: `bash 01_feeder_iam_lambda_roles.sh`,
    then `02_…`, and so on. The scripts refuse to run while `.env` still holds
    the example values.
-3. Each script checks what already exists and can be re-run safely. Script 03
+3. Each script checks what already exists and can be re-run safely. Script 02
    asks for confirmation before applying the bucket policy.
 4. Generated JSON/SQL/zip files go to `build/` (ignored by git).
-5. Then test with `18_test.sh` (section 11) and query with `SQL_QUERIES.md`.
+5. Then test with `13_test.sh` (section 10) and query with `SQL_QUERIES.md`.
    If something returns nothing, use `TROUBLESHOOTING.md`.
 
 | Script | Account | Task | Section below |
 |---|---|---|---|
 | `01_feeder_iam_lambda_roles.sh` | Feeder | Lambda exec role + grantee role | 3 |
-| `02_feeder_iam_replication_role.sh` | Feeder | Replication role | 6.3 |
-| `03_storage_s3_datalake.sh` | Storage | Data lake bucket + Access-Grants-only policy (asks before applying) | 2.2 |
-| `04_storage_s3_cloudtrail_logs.sh` | Storage | Storage CloudTrail log bucket + lifecycle + policy | 2.1, 5 |
-| `05_storage_s3_feeder_replica.sh` | Storage | Replica bucket + versioning + lifecycle + policy | 2.1, 2.3 |
-| `06_storage_s3_athena_results.sh` | Storage | Athena results bucket | 9 |
-| `07_storage_access_grants_location_role.sh` | Storage | Location role | 4.1 |
-| `08_storage_access_grants_location_and_grant.sh` | Storage | Location + grant (reuses existing) | 4.2 |
-| `09_ram_share_access_grants.sh` | both | RAM share + accept invitation | 4.3 |
-| `10_storage_cloudtrail.sh` | Storage | Trail + event selectors | 5 |
-| `11_feeder_s3_cloudtrail_logs.sh` | Feeder | Feeder log bucket + versioning + lifecycle + policy | 2.1, 6.2 |
-| `12_feeder_cloudtrail.sh` | Feeder | Trail + event selectors | 6.2 |
-| `13_feeder_s3_replication.sh` | Feeder | Replication rule | 6.4 |
-| `14_feeder_lambda_datalake.sh` | Feeder | Lambda `DataLakePocObjects` (code in `lambda/`) | 7 |
-| `15_storage_grants_inventory_lambda.sh` | Storage | Grants history: bucket + role + Lambda (append-only CSV) | 8 |
-| `16_storage_grants_inventory_eventbridge.sh` | Storage | EventBridge rules: on grant change + daily | 8 |
-| `17_storage_glue_athena.sh` | Storage | Workgroup, Glue database, tables | 9 |
-| `18_test.sh` | both | Tests | 11 |
-| `99_teardown.sh` | both | Remove everything (asks for confirmation) | 12 |
+| `02_storage_s3_datalake.sh` | Storage | Data lake bucket + Access-Grants-only policy (asks before applying) | 2.2 |
+| `03_storage_s3_cloudtrail_logs.sh` | Storage | Storage CloudTrail log bucket + lifecycle + policy | 2.1, 5 |
+| `04_storage_s3_athena_results.sh` | Storage | Athena results bucket | 8 |
+| `05_storage_access_grants_location_role.sh` | Storage | Location role | 4.1 |
+| `06_storage_access_grants_location_and_grant.sh` | Storage | Location + grant (reuses existing) | 4.2 |
+| `07_ram_share_access_grants.sh` | both | RAM share + accept invitation | 4.3 |
+| `08_storage_cloudtrail.sh` | Storage | Trail + event selectors | 5 |
+| `09_feeder_lambda_datalake.sh` | Feeder | Lambda `DataLakePocObjects` (code in `lambda/`) | 6 |
+| `10_storage_grants_inventory_lambda.sh` | Storage | Grants history: bucket + role + Lambda (append-only CSV) | 7 |
+| `11_storage_grants_inventory_eventbridge.sh` | Storage | EventBridge rules: on grant change + daily | 7 |
+| `12_storage_glue_athena.sh` | Storage | Workgroup, Glue database, tables | 8 |
+| `13_test.sh` | both | Tests | 10 |
+| `99_teardown.sh` | both | Remove everything (asks for confirmation) | 11 |
 
 The script order differs slightly from the sections below: roles that other
 policies name as principals are created first, because IAM checks a principal
@@ -63,8 +58,6 @@ Placeholders used throughout:
 | `<STORAGE_ACCOUNT_ID>` | Account that owns the data lake and the Access Grants instance |
 | `<DATALAKE_BUCKET>` | The data lake bucket (Storage) |
 | `<STORAGE_CT_BUCKET>` | CloudTrail logs of the Storage account (Storage) |
-| `<FEEDER_CT_BUCKET>` | CloudTrail logs of the Feeder account (Feeder) |
-| `<FEEDER_CT_REPLICA_BUCKET>` | Replica of the Feeder CloudTrail logs (Storage) |
 | `<ATHENA_RESULTS_BUCKET>` | Athena query results (Storage) |
 | `<INVENTORY_BUCKET>` | Grants history CSV (Storage) |
 | `<STORAGE_ADMIN_ARN>` | IAM role or user used for admin work in Storage |
@@ -86,8 +79,9 @@ data lake. Instead, every access goes through **S3 Access Grants**:
    the requested prefix and permission.
 4. The workload uses those credentials for the actual S3 calls.
 
-On top of that, every access is logged with CloudTrail so it can be audited in
-Athena: *which role did what on which file, and when.*
+On top of that, every access is logged with CloudTrail in the Storage account
+so it can be audited in Athena: *which role did what on which file, and when.*
+Everything needed for that is in Storage; Feeder's logs are not used.
 
 ```
 FEEDER account                                         STORAGE account
@@ -97,8 +91,6 @@ Lambda DataLakePocObjects                              Access Grants instance
   └─ sts:AssumeRole (+ SourceIdentity)                   ├─ grant     FeederAccessGrantsRole → READWRITE
       └─ FeederAccessGrantsRole ── GetDataAccess ──▶     └─ shared with Feeder via RAM
                                                        <DATALAKE_BUCKET>  (reachable only via Access Grants)
-CloudTrail FeederTrail
-  └─ <FEEDER_CT_BUCKET> ── S3 replication ─────────▶  <FEEDER_CT_REPLICA_BUCKET>
                                                        CloudTrail StorageDataLakeTrail → <STORAGE_CT_BUCKET>
                                                        Lambda AccessGrantsInventory → <INVENTORY_BUCKET>
                                                        Glue database cloudtrail_logs + Athena
@@ -118,7 +110,7 @@ These findings drive several design choices below:
   callers can't be forced to.
 - **Storage sees a Feeder caller only partially.** On `GetDataAccess`, Storage
   records the Feeder account and the role *ID* (`AROA…`), not the role name or
-  ARN. The full ARN and *who assumed the role* are only in Feeder's own logs.
+  ARN.
 - **The grant is the reliable link.** Each `GetDataAccess` event in Storage
   records which grant it matched (`matchedAccessGrantArn`). With one grant per
   consuming role, the grant identifies the role. This is what the attribution
@@ -133,24 +125,23 @@ These findings drive several design choices below:
 
 ## 2. Storage account — buckets
 
-Five buckets are created, all with **Block Public Access** fully on and
+Four buckets are created, all with **Block Public Access** fully on and
 **default encryption SSE-S3 (AES256)**:
 
 | Bucket | Purpose | Versioning | Lifecycle |
 |---|---|---|---|
 | `<DATALAKE_BUCKET>` | The data | off | none |
 | `<STORAGE_CT_BUCKET>` | Storage CloudTrail logs | off | yes |
-| `<FEEDER_CT_REPLICA_BUCKET>` | Replicated Feeder CloudTrail logs | **on** (required by replication) | yes |
 | `<ATHENA_RESULTS_BUCKET>` | Athena query results | off | none |
 | `<INVENTORY_BUCKET>` | Grants history CSV | off | none (history is needed) |
 
-### 2.1 Lifecycle for log buckets
+### 2.1 Lifecycle for the log bucket
 
-Log buckets keep logs for a fixed number of days: `LOG_RETENTION_DAYS` in
-`.env`, 30 in the example below. Because the
-replica bucket is versioned, the rule also removes old versions and the delete
-markers left behind — otherwise deleted logs keep occupying (and costing)
-storage invisibly. The same rule is used on the Feeder log bucket.
+The CloudTrail log bucket keeps logs for a fixed number of days:
+`LOG_RETENTION_DAYS` in `.env`, 30 in the example below. The rule also removes
+old versions and delete markers, so it keeps working if versioning is ever
+turned on — otherwise deleted logs would keep occupying (and costing) storage
+invisibly.
 
 ```json
 {
@@ -211,37 +202,6 @@ except the one admin role you name here.
         "Bool":            { "aws:ViaAWSService": "false" },
         "ArnNotEquals":    { "aws:PrincipalArn": "<STORAGE_ADMIN_ARN>" }
       }
-    }
-  ]
-}
-```
-
-### 2.3 Replica bucket policy — accept replication from Feeder
-
-Lets the Feeder replication role (section 6.3, script 02) write replicated objects and hand
-their ownership to Storage. Apply it **after** that role exists: IAM checks the
-principal when the policy is saved.
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AllowFeederReplication",
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::<FEEDER_ACCOUNT_ID>:role/CloudTrailReplicationRole" },
-      "Action": [
-        "s3:ReplicateObject",
-        "s3:ReplicateDelete",
-        "s3:ReplicateTags",
-        "s3:GetBucketVersioning",
-        "s3:PutBucketVersioning",
-        "s3:ObjectOwnerOverrideToBucketOwner"
-      ],
-      "Resource": [
-        "arn:aws:s3:::<FEEDER_CT_REPLICA_BUCKET>",
-        "arn:aws:s3:::<FEEDER_CT_REPLICA_BUCKET>/*"
-      ]
     }
   ]
 }
@@ -344,7 +304,7 @@ Three things are attached to it: a location role, a location with a grant, and
 a RAM share.
 
 **Existing Access Grants setup?** If a location for the data lake bucket
-already exists, script 08 reuses it — with whatever location role it has — and
+already exists, script 06 reuses it — with whatever location role it has — and
 the role from 4.1 stays unused. That role's name is what appears in the S3 log
 entries; the queries in `SQL_QUERIES.md` match any role name.
 
@@ -522,175 +482,7 @@ logs, but only for this trail:
 
 ---
 
-## 6. Feeder account — CloudTrail and replication to Storage
-
-### 6.1 Why Feeder's logs go to Storage
-
-The grantee role ARN can be found from Storage's logs alone (section 10). But two
-things are **only** in Feeder's logs:
-
-- the full session ARN of the `GetDataAccess` caller
-  (`arn:aws:sts::<FEEDER_ACCOUNT_ID>:assumed-role/FeederAccessGrantsRole/<session>`);
-- **who assumed the grantee role** — the user or workload behind it
-  (here `FeederDataLakeLambdaRole`), recorded on Feeder's `AssumeRole` event.
-
-These are **management events**, so Feeder's trail must keep management
-events on. A Feeder trail limited to S3 data events on the data lake would
-capture nothing: data events made with Access Grants credentials belong to the
-Storage account and are only delivered there.
-
-The Storage and Feeder copies of the same `GetDataAccess` call share the same
-`sharedEventID` and `requestID`, so they can be joined exactly.
-
-### 6.2 Trail `FeederTrail`
-
-Single-region, log file validation on, writing to `<FEEDER_CT_BUCKET>`
-(versioned — required for replication — with the lifecycle from 2.1).
-
-Event selectors — management events only:
-
-```json
-[
-  {
-    "Name": "Management events (exclude KMS and RDS Data API)",
-    "FieldSelectors": [
-      { "Field": "eventCategory", "Equals": ["Management"] },
-      { "Field": "eventSource", "NotEquals": ["kms.amazonaws.com", "rdsdata.amazonaws.com"] }
-    ]
-  }
-]
-```
-
-> Using an existing Feeder trail? Its **management events must be on**
-> (console: trail → *Management events* → Read and Write). A trail with only
-> data events logs no `GetDataAccess` in Feeder, and Query 1 then can't find the
-> grantee ARN. You may add data-event selectors on top; note that saving
-> selectors with the CLI replaces all of them.
-
-Bucket policy for `<FEEDER_CT_BUCKET>`:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Sid": "AWSCloudTrailAclCheck",
-      "Effect": "Allow",
-      "Principal": { "Service": "cloudtrail.amazonaws.com" },
-      "Action": "s3:GetBucketAcl",
-      "Resource": "arn:aws:s3:::<FEEDER_CT_BUCKET>",
-      "Condition": {
-        "StringEquals": {
-          "aws:SourceArn": "arn:aws:cloudtrail:<REGION>:<FEEDER_ACCOUNT_ID>:trail/FeederTrail"
-        }
-      }
-    },
-    {
-      "Sid": "AWSCloudTrailWrite",
-      "Effect": "Allow",
-      "Principal": { "Service": "cloudtrail.amazonaws.com" },
-      "Action": "s3:PutObject",
-      "Resource": "arn:aws:s3:::<FEEDER_CT_BUCKET>/AWSLogs/<FEEDER_ACCOUNT_ID>/*",
-      "Condition": {
-        "StringEquals": {
-          "s3:x-amz-acl": "bucket-owner-full-control",
-          "aws:SourceArn": "arn:aws:cloudtrail:<REGION>:<FEEDER_ACCOUNT_ID>:trail/FeederTrail"
-        }
-      }
-    }
-  ]
-}
-```
-
-### 6.3 Replication role `CloudTrailReplicationRole`
-
-S3 assumes this role to copy new log files to Storage.
-
-Trust policy:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": { "Service": "s3.amazonaws.com" },
-      "Action": "sts:AssumeRole"
-    }
-  ]
-}
-```
-
-Permissions — read the source versions, write to the destination:
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetReplicationConfiguration", "s3:ListBucket"],
-      "Resource": "arn:aws:s3:::<FEEDER_CT_BUCKET>"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:GetObjectVersionForReplication",
-        "s3:GetObjectVersionAcl",
-        "s3:GetObjectVersionTagging"
-      ],
-      "Resource": "arn:aws:s3:::<FEEDER_CT_BUCKET>/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "s3:ReplicateObject",
-        "s3:ReplicateDelete",
-        "s3:ReplicateTags",
-        "s3:ObjectOwnerOverrideToBucketOwner"
-      ],
-      "Resource": "arn:aws:s3:::<FEEDER_CT_REPLICA_BUCKET>/*"
-    }
-  ]
-}
-```
-
-### 6.4 Replication rule
-
-Replicates the whole bucket to `<FEEDER_CT_REPLICA_BUCKET>` and makes Storage
-the owner of the copies. **Delete-marker replication is disabled**: deleting
-files in Feeder (for example in the console) does not hide them in Storage.
-Each bucket expires its own copies through its lifecycle rule; lifecycle
-deletions are never replicated.
-
-```json
-{
-  "Role": "arn:aws:iam::<FEEDER_ACCOUNT_ID>:role/CloudTrailReplicationRole",
-  "Rules": [
-    {
-      "ID": "replicate-to-storage",
-      "Status": "Enabled",
-      "Priority": 1,
-      "Filter": {},
-      "DeleteMarkerReplication": { "Status": "Disabled" },
-      "Destination": {
-        "Bucket": "arn:aws:s3:::<FEEDER_CT_REPLICA_BUCKET>",
-        "Account": "<STORAGE_ACCOUNT_ID>",
-        "StorageClass": "STANDARD",
-        "AccessControlTranslation": { "Owner": "Destination" }
-      }
-    }
-  ]
-}
-```
-
-Replication only copies objects written after the rule exists. Versioning must
-stay **enabled** on both buckets — suspending it on either side stops
-replication.
-
----
-
-## 7. Feeder account — Lambda `DataLakePocObjects`
+## 6. Feeder account — Lambda `DataLakePocObjects`
 
 A small Python 3.12 Lambda that lists, creates and deletes files in the data
 lake. It runs as `FeederDataLakeLambdaRole` and has three environment
@@ -718,7 +510,7 @@ doesn't work):
 | add `"no_source_identity": true` | same, without setting `SourceIdentity` (testing) |
 
 In the Lambda console, save each as a named test event (**Test** → **Create new
-event**) and run them one after another; `18_test.sh` runs a sequence from the CLI.
+event**) and run them one after another; `13_test.sh` runs a sequence from the CLI.
 
 On failure it returns `operation` (`AssumeRole`, `GetDataAccess` or the S3
 call), so you can see which step was denied. The code is in
@@ -726,16 +518,16 @@ call), so you can see which step was denied. The code is in
 
 ---
 
-## 8. Storage account — grants history
+## 7. Storage account — grants history
 
-### 8.1 Why
+### 7.1 Why
 
-The attribution query (section 10) needs to translate a grant ID into the grantee
+The attribution query (section 9) needs to translate a grant ID into the grantee
 role ARN. Grants are configuration, not log events: their creation may have
 happened long before the oldest log you still keep. So the grants are recorded
 in a file of their own instead of being hardcoded in the query.
 
-### 8.2 How
+### 7.2 How
 
 - A Lambda **`AccessGrantsInventory`** keeps an **append-only CSV** of all
   grants: `s3://<INVENTORY_BUCKET>/access-grants-history/access_grants_history.csv`.
@@ -820,7 +612,7 @@ EventBridge rule `AccessGrantsInventoryDaily`: schedule `rate(1 day)`.
 Each rule needs a Lambda resource permission allowing
 `events.amazonaws.com` to invoke the function, limited to that rule's ARN.
 
-### 8.3 Setting up the rules in the console (instead of script 16)
+### 7.3 Setting up the rules in the console (instead of script 11)
 
 Storage account, **same region** as the Access Grants instance.
 
@@ -839,13 +631,13 @@ Storage account, **same region** as the Access Grants instance.
 name `AccessGrantsInventoryDaily`, **Recurring schedule** → **Rate-based** `1`
 days, flexible time window **Off**; target **AWS Lambda – Invoke** →
 `AccessGrantsInventory`; permissions **Create new role for this schedule**.
-Use this *or* the rule from script 16, not both. It's a safety net: a missed
+Use this *or* the rule from script 11, not both. It's a safety net: a missed
 grant change would otherwise only be caught at the next change.
 
 **Check it works:** create a test grant, wait 2–5 minutes, then look at the
 rule's **Monitoring** tab (`TriggeredRules`, `Invocations`), the Lambda's
 CloudWatch log (`"created": 1`) and the last line of the CSV. If nothing
-happens, follow `TROUBLESHOOTING.md` check 8.
+happens, follow `TROUBLESHOOTING.md` check 7.
 
 > Tested: the append logic (first run, no change, new grant, deleted grant,
 > concurrent change) and the Glue table + attribution query in the PoC
@@ -853,19 +645,18 @@ happens, follow `TROUBLESHOOTING.md` check 8.
 
 ---
 
-## 9. Storage account — Glue and Athena
+## 8. Storage account — Glue and Athena
 
 - **Athena workgroup `cloudtrail-correlation`**: results written to
   `<ATHENA_RESULTS_BUCKET>` with SSE-S3; workgroup settings enforced.
-- **Glue database `cloudtrail_logs`**, with one table per log source:
+- **Glue database `cloudtrail_logs`**, with two tables:
 
 | Table | Data | Location |
 |---|---|---|
 | `storage_datalake_trail` | Storage CloudTrail | `s3://<STORAGE_CT_BUCKET>/AWSLogs/<STORAGE_ACCOUNT_ID>/CloudTrail/<REGION>/` |
-| `feeder_trail` | Replicated Feeder CloudTrail | `s3://<FEEDER_CT_REPLICA_BUCKET>/AWSLogs/<FEEDER_ACCOUNT_ID>/CloudTrail/<REGION>/` |
 | `access_grants_history` | Grants history (CSV) | `s3://<INVENTORY_BUCKET>/access-grants-history/` |
 
-The two CloudTrail tables use AWS's standard CloudTrail schema with
+The CloudTrail table uses AWS's standard CloudTrail schema with
 **partition projection** on `year`/`month`/`day` (no `MSCK REPAIR` needed; queries
 must filter on these columns to avoid full scans). One addition matters:
 `useridentity.sessioncontext` declares a **`sourceidentity`** field. Without it
@@ -879,7 +670,7 @@ prefix, so keep only the history CSV there.
 
 ---
 
-## 10. Attribution: which role accessed which file
+## 9. Attribution: which role accessed which file
 
 The query links four records, all in Storage:
 
@@ -943,10 +734,9 @@ ORDER BY s3.eventtime DESC
 
 Adjust `year` and `month` in the three CTEs to the period you query.
 
-This is Query 3 in [SQL_QUERIES.md](SQL_QUERIES.md) (plus the
-`source_identity` column). Two other variants — one that joins Storage's and
-Feeder's logs, one with the grants hardcoded — are there too, with queries to
-list the grants.
+This is Query 2 in [SQL_QUERIES.md](SQL_QUERIES.md) (plus the
+`source_identity` column). A variant with the grants hardcoded is there too,
+with queries to list the grants.
 
 What the columns tell you:
 
@@ -956,14 +746,13 @@ What the columns tell you:
 - **`source_identity`** — only filled if the caller set `SourceIdentity` and
   Access Grants didn't serve the call from an earlier session. Treat it as a
   bonus, not as evidence.
-- **Who assumed the grantee role** is not in this result. For that, look up
-  Feeder's `AssumeRole` events on `FeederAccessGrantsRole` in `feeder_trail`.
-  If several people or workloads share a grantee role, this is the only way to
-  tell them apart — or give each of them its own role and grant.
+- **Who assumed the grantee role** is not in this result: Storage's logs don't
+  show it. If several people or workloads share a grantee role, give each of
+  them its own role and grant, so the grantee identifies them.
 
 ---
 
-## 11. Testing
+## 10. Testing
 
 1. Invoke the Lambda with `list`, then `create`, `list`, `delete`. Expect
    success for all four; `AccessDenied` in the first minutes after setup is
@@ -971,22 +760,19 @@ What the columns tell you:
 2. Try to list the data lake directly with an admin from Feeder, and with a
    Storage admin other than `<STORAGE_ADMIN_ARN>`. Both must be refused by the
    bucket policy.
-3. Check replication: new Feeder log files show replication status `COMPLETED`
-   and appear in `<FEEDER_CT_REPLICA_BUCKET>`.
-4. Wait **5–15 minutes** for CloudTrail delivery (management events can arrive
+3. Wait **5–15 minutes** for CloudTrail delivery (management events can arrive
    later than data events), then run the attribution query. Each of your test
    operations should appear with `FeederAccessGrantsRole` as grantee. Don't
-   empty the log buckets before the logs have been read.
-5. Create a test grant and check that a `CREATED` line for it is appended to the
+   empty the log bucket before the logs have been read.
+4. Create a test grant and check that a `CREATED` line for it is appended to the
    grants history CSV within a few minutes; delete it and check for `DELETED`.
 
 ---
 
-## 12. Teardown
+## 11. Teardown
 
-Reverse order: EventBridge rules and their targets, the grants history Lambda, both
-trails, the RAM share, the grant and location, Glue tables and database, the
-Athena workgroup, the Feeder Lambda, the replication rule, then the IAM roles
-(remove inline policies and detach managed policies first). Versioned buckets
-must be emptied of **all versions and delete markers** before they can be
-deleted; a plain "empty" in the console only adds delete markers.
+Reverse order: EventBridge rules and their targets, the grants history Lambda,
+the trail, the RAM share, the grant and location, Glue tables and database, the
+Athena workgroup, the Feeder Lambda, then the IAM roles (remove inline policies
+and detach managed policies first), then the buckets. `99_teardown.sh` empties
+each bucket of all versions and delete markers before deleting it.

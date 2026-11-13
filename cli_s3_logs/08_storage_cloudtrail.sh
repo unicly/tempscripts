@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# 10 — Storage: CloudTrail trail with management events (incl. GetDataAccess,
+# 08 — Storage: CloudTrail trail with management events (incl. GetDataAccess,
 # Access Grants' internal AssumeRole, grant changes) and S3 data events on the
-# data lake bucket only. Needs the log bucket from 04.
+# data lake bucket only. Needs the log bucket from 03.
 source "$(dirname "$0")/lib.sh"
 
 if aws cloudtrail get-trail --name "$STORAGE_TRAIL" --region "$REGION" --profile "$STORAGE_PROFILE" >/dev/null 2>&1; then

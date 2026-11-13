@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# 99 — Teardown: removes everything created by 01–17, in reverse order.
+# 99 — Teardown: removes everything created by 01–12, in reverse order.
 # PERMANENT: empties and deletes all buckets from .env, including the data lake
-# and all CloudTrail logs. Leaves the Access Grants instance itself in place.
+# and the Storage CloudTrail logs. Leaves the Access Grants instance itself in place.
 source "$(dirname "$0")/lib.sh"
 
 echo "This PERMANENTLY deletes the data lake setup in ${FEEDER_ACCOUNT_ID} and ${STORAGE_ACCOUNT_ID}, including:"
-for b in "$DATALAKE_BUCKET" "$STORAGE_CT_BUCKET" "$FEEDER_CT_REPLICA_BUCKET" "$ATHENA_RESULTS_BUCKET" "$INVENTORY_BUCKET" "$FEEDER_CT_BUCKET"; do
+for b in "$DATALAKE_BUCKET" "$STORAGE_CT_BUCKET" "$ATHENA_RESULTS_BUCKET" "$INVENTORY_BUCKET"; do
   echo "  - s3://$b (all objects, versions and delete markers)"
 done
 read -r -p "Type 'delete' to continue: " answer
@@ -48,7 +48,7 @@ for r in AccessGrantsInventoryOnChange AccessGrantsInventoryDaily; do
   quiet aws events delete-rule --name "$r" "${S[@]}"
 done
 quiet aws lambda delete-function --function-name AccessGrantsInventory "${S[@]}"
-for t in access_grants_history access_grants feeder_trail storage_datalake_trail; do
+for t in access_grants_history storage_datalake_trail; do
   quiet aws glue delete-table --database-name "$GLUE_DATABASE" --name "$t" "${S[@]}"
 done
 quiet aws glue delete-database --name "$GLUE_DATABASE" "${S[@]}"
@@ -56,11 +56,9 @@ quiet aws athena delete-work-group --work-group "$ATHENA_WORKGROUP" --recursive-
 quiet aws cloudtrail delete-trail --name "$STORAGE_TRAIL" "${S[@]}"
 log "Storage inventory, Glue, Athena, trail removed"
 
-# --- Feeder: Lambda, replication, trail ---------------------------------------
+# --- Feeder: Lambda ------------------------------------------------------------
 quiet aws lambda delete-function --function-name DataLakePocObjects "${F[@]}"
-quiet aws s3api delete-bucket-replication --bucket "$FEEDER_CT_BUCKET" --profile "$FEEDER_PROFILE"
-quiet aws cloudtrail delete-trail --name "$FEEDER_TRAIL" "${F[@]}"
-log "Feeder Lambda, replication, trail removed"
+log "Feeder Lambda removed"
 
 # --- Storage: RAM share, grant, location --------------------------------------
 SHARE_ARN=$(aws ram get-resource-shares --resource-owner SELF --name "$RAM_SHARE_NAME" "${S[@]}" \
@@ -84,13 +82,11 @@ delete_role "$STORAGE_PROFILE" AccessGrantsInventoryRole
 delete_role "$STORAGE_PROFILE" S3AccessGrantsLocationRole
 delete_role "$FEEDER_PROFILE"  FeederAccessGrantsRole
 delete_role "$FEEDER_PROFILE"  FeederDataLakeLambdaRole
-delete_role "$FEEDER_PROFILE"  CloudTrailReplicationRole
 
 # --- Buckets (data lake bucket policy is removed first, else the admin check applies) ---
 quiet aws s3api delete-bucket-policy --bucket "$DATALAKE_BUCKET" --profile "$STORAGE_PROFILE"
-for b in "$DATALAKE_BUCKET" "$STORAGE_CT_BUCKET" "$FEEDER_CT_REPLICA_BUCKET" "$ATHENA_RESULTS_BUCKET" "$INVENTORY_BUCKET"; do
+for b in "$DATALAKE_BUCKET" "$STORAGE_CT_BUCKET" "$ATHENA_RESULTS_BUCKET" "$INVENTORY_BUCKET"; do
   empty_and_delete_bucket "$STORAGE_PROFILE" "$b"
 done
-empty_and_delete_bucket "$FEEDER_PROFILE" "$FEEDER_CT_BUCKET"
 
 log "teardown complete"

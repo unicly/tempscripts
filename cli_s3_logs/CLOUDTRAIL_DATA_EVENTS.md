@@ -15,7 +15,7 @@ CloudTrail logs two kinds of events:
 The actual reads and writes in the data lake are **data events**. Without
 them, CloudTrail records that someone obtained Access Grants credentials
 (`GetDataAccess`), but not which files they read, wrote or deleted. That's
-step 1 of the chain in Query 1 (`SQL_QUERIES.md`), the S3 event with the
+step 1 of the chain in the queries (`SQL_QUERIES.md`), the S3 event with the
 `access-grants-<uuid>` session, so it would have nothing to work with.
 
 ## Where to turn them on
@@ -24,12 +24,12 @@ step 1 of the chain in Query 1 (`SQL_QUERIES.md`), the S3 event with the
 console: CloudTrail → Trails → *your trail* → **Data events** → Edit. Choose
 data event type **S3**, then add a selector `resources.ARN` **starts with**
 `arn:aws:s3:::<data-lake-bucket>/`. Keep the trailing `/`: the ARNs of objects
-in the bucket start with it. Script `10_storage_cloudtrail.sh` does this from
+in the bucket start with it. Script `08_storage_cloudtrail.sh` does this from
 the CLI.
 
-**Feeder trail:** **management events** are enough, because they give
-Feeder's copy of `GetDataAccess` with the full role ARN. Script
-`12_feeder_cloudtrail.sh` configures this.
+The same trail must also log **management events**: `GetDataAccess` and Access
+Grants' `AssumeRole` are management events, and the queries need them too.
+Only the Storage account's trail is needed; Feeder's logs aren't used.
 
 ## What's on the bucket
 
@@ -43,6 +43,6 @@ don't use. You don't need it for this setup.
 
 ## Keep cost and volume down
 
-Limit data events to the data lake bucket, as script `10` does. Don't log all
+Limit data events to the data lake bucket, as script `08` does. Don't log all
 buckets. In particular, never log the bucket where the trail writes its own
 logs: each log file it writes would itself be logged.

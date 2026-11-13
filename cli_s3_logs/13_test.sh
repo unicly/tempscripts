@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# 18 — Test: Lambda list/create/delete through Access Grants (with and without
+# 13 — Test: Lambda list/create/delete through Access Grants (with and without
 # SourceIdentity), direct access refused, grants history CSV present.
 # AccessDenied in the first ~4 minutes after setup = IAM/RAM propagation; retry.
 # Then wait 5–15 min for CloudTrail and run SQL_QUERIES.md or
-# DATALAKE_README.md section 10. Don't empty the log buckets before that.
+# DATALAKE_README.md section 9. Don't empty the log bucket before that.
 source "$(dirname "$0")/lib.sh"
 
 invoke() {   # invoke <json-payload>

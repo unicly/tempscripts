@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# 17 — Storage: Athena workgroup, Glue database and the three tables
-#   storage_datalake_trail : Storage CloudTrail          (bucket from 04)
-#   feeder_trail           : replicated Feeder CloudTrail (bucket from 05)
-#   access_grants_history  : append-only grants history CSV (bucket from 15)
-# CloudTrail tables use partition projection (year/month/day) and declare
+# 12 — Storage: Athena workgroup, Glue database and the two tables
+#   storage_datalake_trail : Storage CloudTrail              (bucket from 03)
+#   access_grants_history  : append-only grants history CSV (bucket from 10)
+# The CloudTrail table uses partition projection (year/month/day) and declare
 # useridentity.sessioncontext.sourceidentity (otherwise Athena can't read it).
 source "$(dirname "$0")/lib.sh"
 
@@ -55,10 +54,9 @@ EOF
 athena_run "ddl_$1.sql"
 }
 
-cloudtrail_ddl storage_datalake_trail "$STORAGE_CT_BUCKET"        "$STORAGE_ACCOUNT_ID"
-cloudtrail_ddl feeder_trail           "$FEEDER_CT_REPLICA_BUCKET" "$FEEDER_ACCOUNT_ID"
+cloudtrail_ddl storage_datalake_trail "$STORAGE_CT_BUCKET" "$STORAGE_ACCOUNT_ID"
 
-# Grants history: the append-only CSV written by AccessGrantsInventory (15).
+# Grants history: the append-only CSV written by AccessGrantsInventory (10).
 # All columns are strings (OpenCSVSerde). Header line skipped.
 cat > ddl_access_grants_history.sql <<EOF
 CREATE EXTERNAL TABLE IF NOT EXISTS ${GLUE_DATABASE}.access_grants_history (
@@ -73,4 +71,4 @@ TBLPROPERTIES ('skip.header.line.count' = '1')
 EOF
 athena_run ddl_access_grants_history.sql
 
-log "done: ${GLUE_DATABASE}.{storage_datalake_trail,feeder_trail,access_grants_history}"
+log "done: ${GLUE_DATABASE}.{storage_datalake_trail,access_grants_history}"
