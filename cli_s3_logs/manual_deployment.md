@@ -29,7 +29,13 @@ export GRANTS_CSV_KEY="${GRANTS_CSV_PREFIX}access_grants_history.csv"
 
 export STORAGE_TRAIL="StorageDataLakeTrail"      # trail created in a later step
 export LOG_RETENTION_DAYS=30
+
+export GLUE_DATABASE="cloudtrail_logs"
+export ATHENA_WORKGROUP="cloudtrail-correlation"
 ```
+
+Run the commands from the `cli_s3_logs` folder: step 4 zips the Lambda code
+from `lambda/`, and the commands write their JSON files to the current folder.
 
 ---
 
@@ -459,3 +465,549 @@ Expected:
 | `FeederAccessGrantsRole` | `GetDataAccessOnStorage` | (none) |
 | `S3AccessGrantsLocationRole` | `S3AccessGrantsLocationS3Policy` | (none) |
 | `AccessGrantsInventoryRole` | `AccessGrantsInventoryPolicy` | `AWSLambdaBasicExecutionRole` |
+
+---
+
+## 3. CloudTrail
+
+One trail in the **Storage** account, `$STORAGE_TRAIL`, writing to the log
+bucket from 1.1. It records:
+
+- **management events**, except KMS and RDS Data API (very noisy). These include
+  `GetDataAccess`, Access Grants' internal `AssumeRole` and grant changes
+  (`CreateAccessGrant`, `DeleteAccessGrant`), which EventBridge (step 5) reacts to;
+- **S3 data events on the data lake bucket only**: the actual reads, writes and
+  deletes. They are off by default and cost extra, hence the limit to one bucket.
+
+### 3.1 Create the trail
+
+Single-region, log file validation on. The bucket policy from 1.1 must be in
+place, otherwise this fails with `InsufficientS3BucketPolicyException`.
+
+```bash
+aws cloudtrail create-trail --name "$STORAGE_TRAIL" --s3-bucket-name "$STORAGE_CT_BUCKET" \
+  --no-is-multi-region-trail --no-include-global-service-events --enable-log-file-validation \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 3.2 Event selectors
+
+Keep the trailing `/` after the bucket name: object ARNs start with it, and
+without it a bucket named `<DATALAKE_BUCKET>-backup` would match too.
+`put-event-selectors` **replaces** all selectors of the trail, so always send
+both.
+
+```bash
+cat > trail-selectors.json <<EOF
+[
+  {
+    "Name": "Management events (exclude KMS and RDS Data API)",
+    "FieldSelectors": [
+      { "Field": "eventCategory", "Equals": ["Management"] },
+      { "Field": "eventSource", "NotEquals": ["kms.amazonaws.com", "rdsdata.amazonaws.com"] }
+    ]
+  },
+  {
+    "Name": "S3 data events on the data lake",
+    "FieldSelectors": [
+      { "Field": "eventCategory", "Equals": ["Data"] },
+      { "Field": "resources.type", "Equals": ["AWS::S3::Object"] },
+      { "Field": "resources.ARN", "StartsWith": ["arn:aws:s3:::${DATALAKE_BUCKET}/"] }
+    ]
+  }
+]
+EOF
+
+aws cloudtrail put-event-selectors --trail-name "$STORAGE_TRAIL" \
+  --advanced-event-selectors file://trail-selectors.json \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 3.3 Start logging
+
+A new trail doesn't log until you start it.
+
+```bash
+aws cloudtrail start-logging --name "$STORAGE_TRAIL" --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 3.4 Check
+
+```bash
+aws cloudtrail get-trail-status --name "$STORAGE_TRAIL" --region "$REGION" --profile "$STORAGE_PROFILE" \
+  --query '{logging:IsLogging, lastDelivery:LatestDeliveryTime, error:LatestDeliveryError}'
+
+aws cloudtrail get-event-selectors --trail-name "$STORAGE_TRAIL" --region "$REGION" --profile "$STORAGE_PROFILE" \
+  --query 'AdvancedEventSelectors[].Name'
+```
+
+Expected: `logging: true` and both selector names. The first log files appear
+in `s3://$STORAGE_CT_BUCKET/AWSLogs/$STORAGE_ACCOUNT_ID/CloudTrail/$REGION/`
+after 5–15 minutes.
+
+---
+
+## 4. Lambda
+
+Two functions, Python 3.12:
+
+| Function | Account | Role (step 2) | Code | Purpose |
+|---|---|---|---|---|
+| `AccessGrantsInventory` | Storage | `AccessGrantsInventoryRole` | `lambda/access_grants_history.py` | keeps the grants history CSV |
+| `DataLakePocObjects` | Feeder | `FeederDataLakeLambdaRole` | `lambda/data_lake_poc_objects.py` | test workload: lists, creates, deletes files through Access Grants |
+
+`create-function` can fail with *"The role defined for the function cannot be
+assumed by Lambda"* if the role is only a few seconds old: wait a minute and run
+it again.
+
+### 4.1 `AccessGrantsInventory` (Storage)
+
+Each run lists all grants and **appends** to the CSV: a `CREATED` line for every
+new grant, a `DELETED` line for every grant that disappeared. Existing lines are
+never changed. Environment variables: the Storage account ID, the bucket and the
+key of the CSV.
+
+```bash
+zip -j access_grants_history.zip lambda/access_grants_history.py
+
+aws lambda create-function --function-name AccessGrantsInventory \
+  --runtime python3.12 --handler access_grants_history.lambda_handler --timeout 60 \
+  --role "arn:aws:iam::${STORAGE_ACCOUNT_ID}:role/AccessGrantsInventoryRole" \
+  --zip-file fileb://access_grants_history.zip \
+  --environment "Variables={ACCOUNT_ID=${STORAGE_ACCOUNT_ID},BUCKET=${INVENTORY_BUCKET},KEY=${GRANTS_CSV_KEY}}" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+**Optional: one run at a time.** The Lambda reads the file, adds lines and writes
+it back; the write only succeeds if the file hasn't changed in between, so
+parallel runs can't lose lines. Reserving a concurrency of 1 avoids the retries.
+New accounts with a concurrency limit of 10 can't reserve any; then skip it.
+
+```bash
+aws lambda put-function-concurrency --function-name AccessGrantsInventory \
+  --reserved-concurrent-executions 1 --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+**First run:** creates the CSV with a `CREATED` line for every existing grant.
+
+```bash
+aws lambda invoke --function-name AccessGrantsInventory \
+  --region "$REGION" --profile "$STORAGE_PROFILE" inventory-out.json
+cat inventory-out.json
+```
+
+Expected: `{"current_grants": …, "appended": …, "created": …, "deleted": 0, "file": "s3://…"}`.
+
+### 4.2 `DataLakePocObjects` (Feeder)
+
+Assumes `FeederAccessGrantsRole`, asks Access Grants in Storage for credentials,
+and uses them on the data lake. It only works once the data lake bucket, the
+Access Grants location, the grant to `FeederAccessGrantsRole` and the RAM share
+with the Feeder account exist (scripts `02`, `06`, `07`).
+
+```bash
+zip -j data_lake_poc_objects.zip lambda/data_lake_poc_objects.py
+
+aws lambda create-function --function-name DataLakePocObjects \
+  --runtime python3.12 --handler data_lake_poc_objects.lambda_handler --timeout 30 \
+  --role "arn:aws:iam::${FEEDER_ACCOUNT_ID}:role/FeederDataLakeLambdaRole" \
+  --zip-file fileb://data_lake_poc_objects.zip \
+  --environment "Variables={BUCKET_NAME=${DATALAKE_BUCKET},STORAGE_ACCOUNT_ID=${STORAGE_ACCOUNT_ID},ASSUME_ROLE_ARN=arn:aws:iam::${FEEDER_ACCOUNT_ID}:role/FeederAccessGrantsRole}" \
+  --region "$REGION" --profile "$FEEDER_PROFILE"
+```
+
+**Test:** one action per invocation.
+
+```bash
+for payload in '{"action":"list"}' \
+               '{"action":"create","key":"test.txt","body":"hello"}' \
+               '{"action":"delete","key":"test.txt"}'; do
+  aws lambda invoke --function-name DataLakePocObjects --cli-binary-format raw-in-base64-out \
+    --payload "$payload" --region "$REGION" --profile "$FEEDER_PROFILE" out.json >/dev/null
+  echo "$payload -> $(cat out.json)"
+done
+```
+
+`AccessDenied` in the first minutes after setup is IAM/RAM propagation. On
+failure the result names the step that was denied (`operation`).
+
+**Deploying a code change later** (either function):
+
+```bash
+zip -j access_grants_history.zip lambda/access_grants_history.py
+aws lambda update-function-code --function-name AccessGrantsInventory \
+  --zip-file fileb://access_grants_history.zip --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+---
+
+## 5. EventBridge
+
+Two rules in the **Storage** account, on the **`default` event bus** (AWS
+service events only arrive there), in the same region as Access Grants. Both
+invoke `AccessGrantsInventory`:
+
+| Rule | Trigger |
+|---|---|
+| `AccessGrantsInventoryOnChange` | every `CreateAccessGrant` / `DeleteAccessGrant` (CloudTrail management event) |
+| `AccessGrantsInventoryDaily` | once a day, as a safety net for missed events |
+
+A run without changes appends nothing, so extra runs are harmless.
+
+### 5.1 Rule on grant change
+
+The pattern is compared **exactly, including upper and lower case**:
+`AWS API Call via CloudTrail` with a capital T. `Cloudtrail` is valid JSON but
+never matches.
+
+```bash
+cat > grant-change-pattern.json <<'EOF'
+{
+  "source": ["aws.s3"],
+  "detail-type": ["AWS API Call via CloudTrail"],
+  "detail": {
+    "eventSource": ["s3.amazonaws.com"],
+    "eventName": ["CreateAccessGrant", "DeleteAccessGrant"]
+  }
+}
+EOF
+
+aws events put-rule --name AccessGrantsInventoryOnChange \
+  --event-pattern file://grant-change-pattern.json \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+
+aws events put-targets --rule AccessGrantsInventoryOnChange \
+  --targets "Id=inventory,Arn=arn:aws:lambda:${REGION}:${STORAGE_ACCOUNT_ID}:function:AccessGrantsInventory" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+**Permission:** allow EventBridge to invoke the Lambda, only from this rule.
+(The console adds this itself; the CLI doesn't.)
+
+```bash
+aws lambda add-permission --function-name AccessGrantsInventory \
+  --statement-id AccessGrantsInventoryOnChange \
+  --action lambda:InvokeFunction --principal events.amazonaws.com \
+  --source-arn "arn:aws:events:${REGION}:${STORAGE_ACCOUNT_ID}:rule/AccessGrantsInventoryOnChange" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 5.2 Daily rule
+
+```bash
+aws events put-rule --name AccessGrantsInventoryDaily --schedule-expression "rate(1 day)" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+
+aws events put-targets --rule AccessGrantsInventoryDaily \
+  --targets "Id=inventory,Arn=arn:aws:lambda:${REGION}:${STORAGE_ACCOUNT_ID}:function:AccessGrantsInventory" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+
+aws lambda add-permission --function-name AccessGrantsInventory \
+  --statement-id AccessGrantsInventoryDaily \
+  --action lambda:InvokeFunction --principal events.amazonaws.com \
+  --source-arn "arn:aws:events:${REGION}:${STORAGE_ACCOUNT_ID}:rule/AccessGrantsInventoryDaily" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 5.3 Check
+
+```bash
+for r in AccessGrantsInventoryOnChange AccessGrantsInventoryDaily; do
+  aws events describe-rule --name "$r" --region "$REGION" --profile "$STORAGE_PROFILE" \
+    --query '{rule:Name, state:State, bus:EventBusName}'
+  aws events list-targets-by-rule --rule "$r" --region "$REGION" --profile "$STORAGE_PROFILE" \
+    --query 'Targets[].Arn' --output text
+done
+```
+
+Expected: both rules `ENABLED` on bus `default`, each with the
+`AccessGrantsInventory` ARN as target.
+
+**End-to-end test:** create or delete a grant, wait 2–5 minutes, then look at
+the last lines of the CSV:
+
+```bash
+aws s3 cp "s3://${INVENTORY_BUCKET}/${GRANTS_CSV_KEY}" - --profile "$STORAGE_PROFILE" | tail -3
+```
+
+If nothing was appended, follow `TROUBLESHOOTING.md` check 7.
+
+---
+
+## 6. Glue
+
+The Glue database and its two tables, in the **Storage** account. The tables are
+created with SQL (`CREATE EXTERNAL TABLE`) run in Athena, so the Athena
+workgroup comes first.
+
+| Resource | Name | Reads |
+|---|---|---|
+| Athena workgroup | `$ATHENA_WORKGROUP` | writes results to `s3://$ATHENA_RESULTS_BUCKET/` |
+| Glue database | `$GLUE_DATABASE` | |
+| Table | `storage_datalake_trail` | the CloudTrail logs (bucket from 1.1) |
+| Table | `access_grants_history` | the grants history CSV (bucket from 1.3) |
+
+### 6.1 Athena workgroup
+
+Results go to the bucket from 1.2, encrypted. "Override client-side settings"
+is on (`EnforceWorkGroupConfiguration=true`): every query in this workgroup
+writes there, users can't choose another location.
+
+```bash
+aws athena create-work-group --name "$ATHENA_WORKGROUP" \
+  --configuration "ResultConfiguration={OutputLocation=s3://${ATHENA_RESULTS_BUCKET}/,EncryptionConfiguration={EncryptionOption=SSE_S3}},EnforceWorkGroupConfiguration=true,PublishCloudWatchMetricsEnabled=true" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 6.2 Glue database
+
+```bash
+aws glue create-database --database-input "Name=${GLUE_DATABASE}" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+### 6.3 Helper to run SQL from the CLI
+
+Athena runs SQL asynchronously. This function starts a statement in the
+workgroup and waits for the result. Alternatively, paste the SQL into the
+Athena console (step 7 explains how): the `cat` commands below print it with
+your values filled in.
+
+```bash
+athena_run() {   # athena_run <sql-file>
+  local qid state
+  qid=$(aws athena start-query-execution --work-group "$ATHENA_WORKGROUP" \
+        --query-string "file://$1" --region "$REGION" --profile "$STORAGE_PROFILE" \
+        --query QueryExecutionId --output text)
+  while :; do
+    state=$(aws athena get-query-execution --query-execution-id "$qid" \
+            --region "$REGION" --profile "$STORAGE_PROFILE" \
+            --query QueryExecution.Status.State --output text)
+    case "$state" in
+      SUCCEEDED) echo "$1: OK"; return 0;;
+      FAILED|CANCELLED)
+        aws athena get-query-execution --query-execution-id "$qid" \
+          --region "$REGION" --profile "$STORAGE_PROFILE" \
+          --query QueryExecution.Status.StateChangeReason --output text
+        return 1;;
+    esac
+    sleep 2
+  done
+}
+```
+
+### 6.4 Table `storage_datalake_trail` (CloudTrail logs)
+
+AWS's standard CloudTrail schema, with two details that matter:
+
+- `useridentity.sessioncontext` declares **`sourceidentity`**. Without it Athena
+  can't read `SourceIdentity`, even though it is in the logs.
+- **Partition projection** on `year`/`month`/`day`: no crawler, no
+  `MSCK REPAIR`, new days are found automatically. Queries must filter on these
+  columns to avoid scanning all logs. The year range `2026,2035` sets which
+  years can be queried.
+
+```bash
+cat > ddl_storage_datalake_trail.sql <<EOF
+CREATE EXTERNAL TABLE IF NOT EXISTS ${GLUE_DATABASE}.storage_datalake_trail (
+  eventversion string,
+  useridentity struct<type:string,principalid:string,arn:string,accountid:string,invokedby:string,accesskeyid:string,username:string,
+                      sessioncontext:struct<attributes:struct<mfaauthenticated:string,creationdate:string>,
+                                            sessionissuer:struct<type:string,principalid:string,arn:string,accountid:string,username:string>,
+                                            sourceidentity:string>>,
+  eventtime string, eventsource string, eventname string, awsregion string, sourceipaddress string, useragent string,
+  errorcode string, errormessage string, requestparameters string, responseelements string, additionaleventdata string,
+  requestid string, eventid string, resources array<struct<arn:string,accountid:string,type:string>>,
+  eventtype string, apiversion string, readonly string, recipientaccountid string, serviceeventdetails string,
+  sharedeventid string, vpcendpointid string, eventcategory string,
+  tlsdetails struct<tlsversion:string,ciphersuite:string,clientprovidedhostheader:string>
+)
+PARTITIONED BY (year string, month string, day string)
+ROW FORMAT SERDE 'org.apache.hive.hcatalog.data.JsonSerDe'
+STORED AS INPUTFORMAT 'com.amazon.emr.cloudtrail.CloudTrailInputFormat'
+OUTPUTFORMAT 'org.apache.hadoop.hive.ql.io.HiveIgnoreKeyTextOutputFormat'
+LOCATION 's3://${STORAGE_CT_BUCKET}/AWSLogs/${STORAGE_ACCOUNT_ID}/CloudTrail/${REGION}/'
+TBLPROPERTIES (
+  'classification'='cloudtrail',
+  'projection.enabled'='true',
+  'projection.year.type'='integer',  'projection.year.range'='2026,2035',
+  'projection.month.type'='integer', 'projection.month.range'='1,12', 'projection.month.digits'='2',
+  'projection.day.type'='integer',   'projection.day.range'='1,31',   'projection.day.digits'='2',
+  'storage.location.template'='s3://${STORAGE_CT_BUCKET}/AWSLogs/${STORAGE_ACCOUNT_ID}/CloudTrail/${REGION}/\${year}/\${month}/\${day}'
+)
+EOF
+
+cat ddl_storage_datalake_trail.sql      # check the values
+athena_run ddl_storage_datalake_trail.sql
+```
+
+An **organization trail** writes to
+`AWSLogs/<organization-id>/<account-id>/CloudTrail/…` instead: then change
+`LOCATION` and `storage.location.template` accordingly.
+
+### 6.5 Table `access_grants_history` (grants history CSV)
+
+Reads every file under the CSV's prefix, so keep only the history CSV there.
+All columns are strings (OpenCSV SerDe). **`skip.header.line.count = 1`** skips
+the header line; without it the header shows up as a row.
+
+```bash
+cat > ddl_access_grants_history.sql <<EOF
+CREATE EXTERNAL TABLE IF NOT EXISTS ${GLUE_DATABASE}.access_grants_history (
+  observed_at string, event string, grant_id string, grant_arn string,
+  grantee_type string, grantee_identifier string, permission string,
+  grant_scope string, location_id string, created_at string
+)
+ROW FORMAT SERDE 'org.apache.hadoop.hive.serde2.OpenCSVSerde'
+WITH SERDEPROPERTIES ('separatorChar' = ',', 'quoteChar' = '"', 'escapeChar' = '\\\\')
+LOCATION 's3://${INVENTORY_BUCKET}/${GRANTS_CSV_PREFIX}'
+TBLPROPERTIES ('skip.header.line.count' = '1')
+EOF
+
+cat ddl_access_grants_history.sql       # check the values
+athena_run ddl_access_grants_history.sql
+```
+
+### 6.6 Check
+
+```bash
+aws glue get-tables --database-name "$GLUE_DATABASE" --region "$REGION" --profile "$STORAGE_PROFILE" \
+  --query 'TableList[].[Name, StorageDescriptor.Location]' --output table
+```
+
+Expected: both tables, each with the S3 location of its data.
+
+---
+
+## 7. Athena: the SQL queries
+
+Run the queries in the **Storage** account: **Athena** → **Query editor**.
+Top right, select the workgroup **`cloudtrail-correlation`**; on the left, data
+source `AwsDataCatalog` and database **`cloudtrail_logs`**. Paste a query, set
+`year` / `month`, **Run**. (If you changed `ATHENA_WORKGROUP` or
+`GLUE_DATABASE` in step 0, use your names here and replace `cloudtrail_logs.`
+in the queries.)
+
+CloudTrail delivers logs after 5–15 minutes; management events (`AssumeRole`,
+`GetDataAccess`) can arrive later than the S3 data events. Query once both are
+in.
+
+To keep a query in the console, use **Save** (it's stored in the workgroup, not
+in S3). The master copy stays in this repository.
+
+### 7.1 Who accessed which file
+
+For every S3 operation made through Access Grants: the **ARN of the grantee
+role**, e.g. `arn:aws:iam::<FEEDER_ACCOUNT_ID>:role/FeederAccessGrantsRole`, plus
+the operation, bucket and file. It uses only Storage's logs and the grants
+history table, and works without callers setting `SourceIdentity`.
+
+How it links the records:
+
+| Step | From → to | Join | Exact? |
+|---|---|---|---|
+| 1 | S3 data event → Access Grants' internal `AssumeRole` | session name `access-grants-<uuid>` | yes |
+| 2 | → `GetDataAccess` | timestamp within ±2 s | timing only |
+| 3 | → grant | `matchedAccessGrantArn` | yes |
+| 4 | → grantee role ARN | `access_grants_history` (`CREATED` line) | yes |
+
+Set `year` and `month` in the three CloudTrail CTEs to the period you query.
+
+```sql
+WITH grants AS (               -- grant IDs are never reused, so deleted grants still resolve
+    SELECT DISTINCT grant_id, grantee_identifier AS grantee_role_arn
+    FROM cloudtrail_logs.access_grants_history
+    WHERE event = 'CREATED'
+),
+ag_sessions AS (               -- Access Grants vends a scoped session
+    SELECT from_iso8601_timestamp(eventtime) AS t,
+           regexp_extract(requestparameters, '"roleSessionName"\s*:\s*"([^"]+)"', 1) AS session_name
+    FROM cloudtrail_logs.storage_datalake_trail
+    WHERE year = '2026' AND month = '11'
+      AND eventsource = 'sts.amazonaws.com' AND eventname = 'AssumeRole'
+      AND requestparameters LIKE '%access-grants-%'
+),
+gda AS (                       -- GetDataAccess: which grant was matched
+    SELECT from_iso8601_timestamp(eventtime) AS t,
+           regexp_extract(additionaleventdata, 'grant/([a-f0-9-]+)', 1) AS grant_id
+    FROM cloudtrail_logs.storage_datalake_trail
+    WHERE year = '2026' AND month = '11' AND eventname = 'GetDataAccess'
+),
+s3_events AS (
+    SELECT eventtime, eventname,
+           useridentity.sessioncontext.sourceidentity AS source_identity,
+           regexp_extract(useridentity.arn, '(access-grants-[a-f0-9-]+)$', 1) AS session_name,
+           regexp_extract(requestparameters, '"bucketName"\s*:\s*"([^"]+)"', 1) AS bucket,
+           regexp_extract(requestparameters, '"key"\s*:\s*"([^"]+)"', 1)        AS file_path
+    FROM cloudtrail_logs.storage_datalake_trail
+    WHERE year = '2026' AND month = '11'
+      AND eventsource = 's3.amazonaws.com'
+      AND eventname IN ('GetObject', 'PutObject', 'DeleteObject', 'CopyObject', 'ListObjects')
+      AND regexp_like(useridentity.arn, '/access-grants-[a-f0-9-]+$')   -- any location role name
+)
+SELECT DISTINCT
+    s3.eventtime,
+    gr.grantee_role_arn,
+    s3.source_identity,
+    s3.eventname AS operation,
+    s3.bucket,
+    s3.file_path
+FROM s3_events s3
+JOIN ag_sessions ag ON ag.session_name = s3.session_name                    -- exact
+JOIN gda g          ON abs(to_unixtime(g.t) - to_unixtime(ag.t)) <= 2       -- timing only
+JOIN grants gr      ON gr.grant_id = g.grant_id                             -- exact
+ORDER BY s3.eventtime DESC
+```
+
+- **`grantee_role_arn`** is always filled; it doesn't depend on callers'
+  discipline.
+- **`source_identity`** is only filled if the caller set `SourceIdentity`. Treat
+  it as a bonus, not as evidence.
+- If two **different** grantees call within the same 2 seconds, one S3 event can
+  appear twice, once per grantee.
+- An S3 event is missing although you expect it → its grant has no `CREATED`
+  line yet: invoke `AccessGrantsInventory` once and run the query again. If the
+  query returns 0 rows, follow `TROUBLESHOOTING.md` checks 0–5.
+
+### 7.2 Grants history
+
+Every grant that ever existed, and when it appeared or disappeared:
+
+```sql
+SELECT observed_at, event, grant_id, grantee_identifier, permission, grant_scope, created_at
+FROM cloudtrail_logs.access_grants_history
+ORDER BY observed_at, grant_id;
+```
+
+### 7.3 Current grants
+
+Only the grants that exist now, those whose last line is `CREATED`:
+
+```sql
+SELECT grant_id, grantee_type, grantee_identifier, permission, grant_scope, created_at
+FROM (
+    SELECT *, row_number() OVER (PARTITION BY grant_id
+                                 ORDER BY observed_at DESC, event DESC) AS rn
+    FROM cloudtrail_logs.access_grants_history
+)
+WHERE rn = 1 AND event = 'CREATED'
+ORDER BY created_at;
+```
+
+The table is as current as the Lambda's last run (after every grant change, and
+daily).
+
+### 7.4 Are logs arriving?
+
+A quick check that the CloudTrail table sees logs, by event category:
+
+```sql
+SELECT eventcategory, count(*) AS events, max(eventtime) AS last
+FROM cloudtrail_logs.storage_datalake_trail
+WHERE year = '2026' AND month = '11'
+GROUP BY eventcategory;
+```
+
+Expected: `Management` and `Data` rows. Only `Management` → the data event
+selector doesn't match the data lake bucket (3.2), or nothing accessed the data
+lake yet.
