@@ -6,6 +6,9 @@ Commands that delete everything created with
 > ⚠️ **Permanent.** This deletes the CloudTrail logs, the grants history CSV and
 > the Athena saved queries and query history. Nothing can be restored
 > afterwards. Back up what you want to keep first (step 1).
+>
+> The CloudTrail log bucket has **Object Lock**: in `COMPLIANCE` mode it can't be
+> deleted until its newest log is 365 days old (step 7.2).
 
 **Not deleted:** the data lake bucket and its data, the S3 Access Grants
 instance, its locations and grants, and the RAM share. The deployment guide
@@ -141,36 +144,88 @@ aws cloudtrail delete-trail --name "$STORAGE_TRAIL" --region "$REGION" --profile
 
 ## 7. Buckets (Storage)
 
+The trail must be deleted first (step 6), or it keeps writing new log files
+into the log bucket while it is being emptied.
+
+### 7.1 Athena results and grants history buckets
+
 A bucket must be empty before it can be deleted; `--force` deletes all objects
 first, then the bucket.
 
 ```bash
-aws s3 rb "s3://${STORAGE_CT_BUCKET}"     --force --profile "$STORAGE_PROFILE"
 aws s3 rb "s3://${ATHENA_RESULTS_BUCKET}" --force --profile "$STORAGE_PROFILE"
 aws s3 rb "s3://${INVENTORY_BUCKET}"      --force --profile "$STORAGE_PROFILE"
 ```
 
-The trail must be deleted first (step 6), or it keeps writing new log files
-into the bucket while it is being emptied.
+### 7.2 CloudTrail log bucket (Object Lock)
 
-**If versioning was turned on** for a bucket, `--force` only removes the current
-versions and `rb` then fails with `BucketNotEmpty`. Delete all versions and
-delete markers (1000 per call), then the bucket:
+`aws s3 rb --force` **doesn't work** on this bucket:
+
+- it is versioned (Object Lock turns versioning on), and `--force` only issues
+  plain deletes, which add delete markers instead of deleting;
+- the bucket policy denies those plain deletes (`DenyDeleteMarkers`);
+- every log version is locked for 365 days after it was written.
+
+What's possible depends on the lock mode. Check it:
 
 ```bash
-empty_versioned_bucket() {   # empty_versioned_bucket <bucket>
-  local batch
+aws s3api get-object-lock-configuration --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
+  --query 'ObjectLockConfiguration.Rule.DefaultRetention' --output text
+```
+
+| Mode | Can the bucket be deleted now? |
+|---|---|
+| `GOVERNANCE` | **Yes**, if you have the permission `s3:BypassGovernanceRetention`: delete every version with the bypass flag (below) |
+| `COMPLIANCE` | **No.** Nobody can delete a log before its lock expires, not even the root user. The bucket can only be deleted once the **newest** log is 365 days old |
+
+**`GOVERNANCE`: empty and delete the bucket.** Deleting specific versions isn't
+denied by the bucket policy, and `--bypass-governance-retention` lifts the lock.
+The function stops if S3 refuses a version (for example in `COMPLIANCE` mode,
+or without the bypass permission) instead of retrying forever.
+
+```bash
+empty_locked_bucket() {   # empty_locked_bucket <bucket>
+  local batch err
   while :; do
     batch=$(aws s3api list-object-versions --bucket "$1" --profile "$STORAGE_PROFILE" \
               --no-paginate --max-keys 1000 --output json \
               --query '{Objects: [Versions[].{Key: Key, VersionId: VersionId} || `[]`, DeleteMarkers[].{Key: Key, VersionId: VersionId} || `[]`][], Quiet: `true`}')
     grep -q '"VersionId"' <<<"$batch" || break
-    aws s3api delete-objects --bucket "$1" --profile "$STORAGE_PROFILE" --delete "$batch" >/dev/null
+    err=$(aws s3api delete-objects --bucket "$1" --profile "$STORAGE_PROFILE" \
+            --bypass-governance-retention --delete "$batch" \
+            --query 'Errors[0].[Code, Key, Message]' --output text)
+    if [ "$err" != "None" ]; then
+      echo "S3 refused to delete a version: $err" >&2
+      return 1
+    fi
   done
+  aws s3api delete-bucket-policy --bucket "$1" --profile "$STORAGE_PROFILE"
   aws s3api delete-bucket --bucket "$1" --profile "$STORAGE_PROFILE"
 }
-empty_versioned_bucket "$STORAGE_CT_BUCKET"
+empty_locked_bucket "$STORAGE_CT_BUCKET"
 ```
+
+Expect a long run for a full year of logs: CloudTrail writes a file every few
+minutes, and the function deletes 1000 versions per call.
+
+**`COMPLIANCE`: wait, then delete.** With the trail deleted (step 6), no new
+locked logs arrive. Find out when the newest log's lock ends:
+
+```bash
+KEY=$(aws s3api list-objects-v2 --bucket "$STORAGE_CT_BUCKET" --prefix "AWSLogs/" --profile "$STORAGE_PROFILE" \
+        --query 'sort_by(Contents, &LastModified)[-1].Key' --output text)
+aws s3api get-object-retention --bucket "$STORAGE_CT_BUCKET" --key "$KEY" --profile "$STORAGE_PROFILE" \
+  --query 'Retention.RetainUntilDate' --output text
+```
+
+Until that date:
+
+- keep the bucket and its **lifecycle rule**: it deletes each log as soon as its
+  lock has expired, so the bucket empties itself over the year;
+- you pay for the storage of the logs that are still there.
+
+After that date, run `empty_locked_bucket "$STORAGE_CT_BUCKET"` (above) to remove
+what's left and delete the bucket.
 
 ---
 
@@ -243,3 +298,4 @@ done
 ```
 
 `S3AccessGrantsLocationRole` still existing is expected if you kept it in step 8.
+The log bucket still existing is expected in `COMPLIANCE` mode (step 7.2).
