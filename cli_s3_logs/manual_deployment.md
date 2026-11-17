@@ -28,7 +28,11 @@ export GRANTS_CSV_PREFIX="access-grants-history/"
 export GRANTS_CSV_KEY="${GRANTS_CSV_PREFIX}access_grants_history.csv"
 
 export STORAGE_TRAIL="StorageDataLakeTrail"      # trail created in a later step
-export LOG_RETENTION_DAYS=30
+
+# CloudTrail log bucket: Object Lock (see 1.1) and lifecycle
+export OBJECT_LOCK_MODE="GOVERNANCE"             # GOVERNANCE or COMPLIANCE — read 1.1 first
+export OBJECT_LOCK_DAYS=365                      # each log file is locked this many days
+export LOG_RETENTION_DAYS=365                    # logs are deleted after this; must be >= OBJECT_LOCK_DAYS
 
 export GLUE_DATABASE="cloudtrail_logs"
 export ATHENA_WORKGROUP="cloudtrail-correlation"
@@ -45,7 +49,7 @@ Three buckets, all in the Storage account:
 
 | Bucket | Content | Bucket policy | Lifecycle |
 |---|---|---|---|
-| `$STORAGE_CT_BUCKET` | CloudTrail logs | yes: only the trail may write | yes: delete logs after `LOG_RETENTION_DAYS` |
+| `$STORAGE_CT_BUCKET` | CloudTrail logs, **Object Lock 365 days** | yes: only the trail may write | yes: delete logs after `LOG_RETENTION_DAYS` |
 | `$ATHENA_RESULTS_BUCKET` | Athena query results | none | none |
 | `$INVENTORY_BUCKET` | Grants history CSV (export of Access Grants) | none | none: the history must be kept |
 
@@ -55,10 +59,58 @@ needed for that; check 1.4 confirms it.
 
 ### 1.1 CloudTrail log bucket
 
-Create the bucket:
+The log bucket uses **S3 Object Lock**: every log file is locked for
+`OBJECT_LOCK_DAYS` (365) days after it is written. During that time it can't be
+deleted or overwritten, so the logs stay usable as audit evidence.
+
+**Decide on the mode before you start** (`OBJECT_LOCK_MODE` in step 0):
+
+| Mode | Who can delete a locked log before the 365 days are over? | Use for |
+|---|---|---|
+| `GOVERNANCE` | only principals with the permission `s3:BypassGovernanceRetention`, and only with an explicit bypass flag | testing, and as long as you may still need to clean up |
+| `COMPLIANCE` | **nobody**, not even the account root user; the retention can't be shortened either | production audit logs |
+
+> ⚠️ With `COMPLIANCE`, the logs **and the bucket** can't be deleted until the
+> last log file is 365 days old, and you pay for their storage until then.
+> Test with `GOVERNANCE` first.
+
+Good to know:
+
+- Object Lock can only be turned on, never off, and it turns on **versioning**,
+  which can't be suspended afterwards.
+- The lock applies to each object **version**. Deleting a log without naming a
+  version only adds a delete marker; the locked version stays.
+- `aws s3 mb` can't turn on Object Lock, so this bucket is created with
+  `aws s3api create-bucket`. Outside `us-east-1` that command needs
+  `--create-bucket-configuration "LocationConstraint=$REGION"`; in `us-east-1`
+  leave that line out.
+
+Create the bucket with Object Lock:
 
 ```bash
-aws s3 mb "s3://$STORAGE_CT_BUCKET" --region "$REGION" --profile "$STORAGE_PROFILE"
+aws s3api create-bucket --bucket "$STORAGE_CT_BUCKET" --object-lock-enabled-for-bucket \
+  --create-bucket-configuration "LocationConstraint=$REGION" \
+  --region "$REGION" --profile "$STORAGE_PROFILE"
+```
+
+**Default retention:** every new log file is locked automatically, without
+CloudTrail having to ask for it.
+
+```bash
+cat > object-lock.json <<EOF
+{
+  "ObjectLockEnabled": "Enabled",
+  "Rule": {
+    "DefaultRetention": {
+      "Mode": "${OBJECT_LOCK_MODE}",
+      "Days": ${OBJECT_LOCK_DAYS}
+    }
+  }
+}
+EOF
+
+aws s3api put-object-lock-configuration --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
+  --object-lock-configuration file://object-lock.json
 ```
 
 **Bucket policy:** CloudTrail may check the bucket ACL and write log files, but
@@ -103,9 +155,15 @@ aws s3api put-bucket-policy --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PR
   --policy file://storage-ct-policy.json
 ```
 
-**Lifecycle:** delete logs after `LOG_RETENTION_DAYS` days. The second rule
-removes the delete markers left behind (it can't be combined with `Days` in one
-rule), and old versions are removed after 1 day if versioning is ever turned on.
+**Lifecycle:** after `LOG_RETENTION_DAYS` days a log file gets a delete marker,
+and one day later the locked version is deleted for good; by then its lock has
+expired. The second rule removes the delete markers left behind (it can't be
+combined with `Days` in one rule).
+
+> Keep `LOG_RETENTION_DAYS` **at least** `OBJECT_LOCK_DAYS`. A shorter value
+> doesn't delete anything earlier (the lock prevents it) but hides the logs
+> behind delete markers: Athena no longer sees them, while you still pay for
+> their storage until the lock expires.
 
 ```bash
 cat > lifecycle.json <<EOF
@@ -169,11 +227,25 @@ done
 aws s3api get-bucket-policy --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" --query Policy --output text
 aws s3api get-bucket-lifecycle-configuration --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
   --query 'Rules[].ID' --output text
+aws s3api get-bucket-versioning --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" --query Status --output text
+aws s3api get-object-lock-configuration --bucket "$STORAGE_CT_BUCKET" --profile "$STORAGE_PROFILE" \
+  --query 'ObjectLockConfiguration.Rule.DefaultRetention'
 ```
 
 Expected: `AES256` and `True True True True` for each bucket; the CloudTrail
 policy; the rules `expire-logs-and-old-versions` and
-`remove-expired-delete-markers`.
+`remove-expired-delete-markers`; versioning `Enabled`; the retention mode and
+`365` days.
+
+Once the trail writes logs (step 3), check that a log file is really locked:
+
+```bash
+KEY=$(aws s3api list-objects-v2 --bucket "$STORAGE_CT_BUCKET" --prefix "AWSLogs/" \
+        --profile "$STORAGE_PROFILE" --query 'Contents[-1].Key' --output text)
+aws s3api get-object-retention --bucket "$STORAGE_CT_BUCKET" --key "$KEY" --profile "$STORAGE_PROFILE"
+```
+
+Expected: the mode and a `RetainUntilDate` 365 days after the file was written.
 
 ---
 
