@@ -113,9 +113,30 @@ aws s3api put-object-lock-configuration --bucket "$STORAGE_CT_BUCKET" --profile 
   --object-lock-configuration file://object-lock.json
 ```
 
-**Bucket policy:** CloudTrail may check the bucket ACL and write log files, but
-only for the trail `$STORAGE_TRAIL` of this account. The trail doesn't need to
-exist yet.
+**Bucket policy:** four statements.
+
+| Sid | Effect | Purpose |
+|---|---|---|
+| `AWSCloudTrailAclCheck` | Allow | CloudTrail may check the bucket ACL, only for the trail `$STORAGE_TRAIL` |
+| `AWSCloudTrailWrite` | Allow | CloudTrail may write log files, only for that trail |
+| `DenyWritesExceptCloudTrail` | Deny | **nobody else can upload**: no forged log can be added as a new version of a real one (Athena would read the forgery; the locked original stays underneath) |
+| `DenyDeleteMarkers` | Deny | **nobody can "delete" a log**: in a versioned bucket a plain delete adds a delete marker, which hides the log from Athena. Delete markers aren't protected by Object Lock |
+
+How the two Deny statements work:
+
+- `DenyWritesExceptCloudTrail` denies `s3:PutObject` to every request that
+  doesn't come from the trail. CloudTrail's requests carry the trail's ARN in
+  `aws:SourceArn`; requests from users and roles carry no `aws:SourceArn`, and
+  for a "not equals" condition a missing key counts as a mismatch, so they are
+  denied.
+- `DenyDeleteMarkers` denies `s3:DeleteObject` (a delete without a version ID).
+  The lifecycle rule below keeps working: S3 runs it itself, and bucket
+  policies don't apply to it.
+- Both apply to **everyone**, administrators included. Deleting specific
+  versions (`s3:DeleteObjectVersion`) isn't denied; Object Lock already blocks it
+  for 365 days.
+
+The trail doesn't need to exist yet.
 
 ```bash
 cat > storage-ct-policy.json <<EOF
@@ -146,6 +167,25 @@ cat > storage-ct-policy.json <<EOF
           "aws:SourceArn": "arn:aws:cloudtrail:${REGION}:${STORAGE_ACCOUNT_ID}:trail/${STORAGE_TRAIL}"
         }
       }
+    },
+    {
+      "Sid": "DenyWritesExceptCloudTrail",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:PutObject",
+      "Resource": "arn:aws:s3:::${STORAGE_CT_BUCKET}/*",
+      "Condition": {
+        "StringNotEquals": {
+          "aws:SourceArn": "arn:aws:cloudtrail:${REGION}:${STORAGE_ACCOUNT_ID}:trail/${STORAGE_TRAIL}"
+        }
+      }
+    },
+    {
+      "Sid": "DenyDeleteMarkers",
+      "Effect": "Deny",
+      "Principal": "*",
+      "Action": "s3:DeleteObject",
+      "Resource": "arn:aws:s3:::${STORAGE_CT_BUCKET}/*"
     }
   ]
 }
