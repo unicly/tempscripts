@@ -1123,3 +1123,75 @@ GROUP BY eventcategory;
 Expected: `Management` and `Data` rows. Only `Management` → the data event
 selector doesn't match the data lake bucket (3.2), or nothing accessed the data
 lake yet.
+
+---
+
+## 8. Grants history from the command line (optional)
+
+`access_grants_history.sh` (in this folder) does the same job as the Lambda
+`AccessGrantsInventory` from step 4.1, but from your shell and into a **local**
+CSV file. Nothing is uploaded to S3. Use it to look at the grants history
+without the Lambda, or to keep a copy of it on your computer.
+
+It uses the Lambda's logic and format: it lists all grants and **appends** a
+`CREATED` line for every new grant and a `DELETED` line for every grant that
+disappeared since the last run. Existing lines are never changed; the header is
+written only when the file is new. Each run prints the same summary as the
+Lambda.
+
+**Needs:** AWS CLI v2, bash and awk, and the permission `s3:ListAccessGrants` on
+the Access Grants instance (in the Storage account). It reads `REGION`,
+`STORAGE_PROFILE` and `STORAGE_ACCOUNT_ID` from step 0; if they aren't set, it
+reads `.env` next to the script.
+
+### 8.1 Run it
+
+```bash
+bash access_grants_history.sh                        # writes ./access_grants_history.csv
+bash access_grants_history.sh ~/grants/history.csv   # or a file of your choice
+```
+
+Expected output, on the first run with two grants:
+
+```
+{"current_grants": 2, "appended": 2, "created": 2, "deleted": 0, "file": "./access_grants_history.csv"}
+```
+
+Run it again later with the **same file**: only changes are appended
+(`"appended": 0` if nothing changed). A run with a new file starts a new history
+with a `CREATED` line for every grant that exists now.
+
+To see what would be appended without changing the file:
+
+```bash
+DRY_RUN=1 bash access_grants_history.sh
+```
+
+### 8.2 Read the file
+
+```bash
+column -s, -t < access_grants_history.csv | less -S
+```
+
+The columns are the same as in the Lambda's CSV and the Glue table
+`access_grants_history` (step 6.5): `observed_at`, `event`, `grant_id`,
+`grant_arn`, `grantee_type`, `grantee_identifier`, `permission`, `grant_scope`,
+`location_id`, `created_at`.
+
+Note that `observed_at` is when the **script** saw the change. The script only
+sees what exists when it runs: a grant created and deleted between two runs
+never appears in the file.
+
+### 8.3 Script or Lambda?
+
+| | Lambda (steps 4.1 and 5) | Script |
+|---|---|---|
+| Runs | automatically, after every grant change and daily | when you run it |
+| Writes to | `s3://$INVENTORY_BUCKET/$GRANTS_CSV_KEY` | a local file |
+| Used by Athena (step 7) | yes, through the Glue table | no |
+
+The attribution query (7.1) reads the Lambda's CSV in S3. The script's file is
+for you: it doesn't replace the Lambda for the queries. Don't copy the script's
+file over the Lambda's CSV in S3: the two histories have different
+`observed_at` values, and the Lambda's file would lose its own lines.
+
